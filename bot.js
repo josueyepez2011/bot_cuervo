@@ -285,15 +285,24 @@ app.get('/', (req, res) => {
     res.send('Bot Activo');
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`🤖 Servidor local corriendo en el puerto ${PORT}`);
     
-    // Lanzar bot de forma segura
-    bot.launch()
-        .then(() => console.log("🚀 Bot de Telegram iniciado correctamente."))
-        .catch((err) => {
-            console.error("❌ Error en Telegraf. Revisa el Token:", err.message);
-        });
+    try {
+        // Detener cualquier instancia previa antes de lanzar
+        bot.stop('Restarting');
+        await new Promise(r => setTimeout(r, 1000));
+        
+        // Lanzar bot de forma segura
+        await bot.launch();
+        console.log("🚀 Bot de Telegram iniciado correctamente.");
+    } catch (err) {
+        console.error("❌ Error en Telegraf:", err.message);
+        // Reintentar después de 5 segundos si falla
+        setTimeout(() => {
+            bot.launch().catch(e => console.error("❌ Reintento fallido:", e.message));
+        }, 5000);
+    }
 });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
