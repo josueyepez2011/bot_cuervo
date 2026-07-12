@@ -199,42 +199,11 @@ async function enviarStart(ctx) {
     ctx.reply(bienvenidaPanel, { parse_mode: 'HTML' });
 }
 
-bot.start((ctx) => { enviarStart(ctx); });
-
-bot.command('menu', async (ctx) => {
-    const userId = ctx.from.id;
-    let tipoMembresia = "❌ Sin acceso";
-
-    if (OWNER_IDS.includes(userId)) {
-        tipoMembresia = "👑 Owner";
-    } else {
-        try {
-            const result = await pool.query(
-                `SELECT (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller, (SELECT acceso FROM vips WHERE cliente_id = $1) as acceso`,
-                [userId]
-            );
-            const row = result.rows[0];
-            if (row.es_seller) tipoMembresia = "💼 Seller";
-            else if (row.acceso === 'perm') tipoMembresia = "💎 VIP Permanente";
-            else if (row.acceso && new Date(row.acceso) > new Date()) tipoMembresia = "⏱️ VIP Activo";
-            else if (row.acceso) tipoMembresia = "❌ Expirado";
-        } catch (e) {}
-    }
-
-    let menu = `╔════════════════════════════╗\n`;
-    menu += `       👁️ <b>EL OJO DE DIOS</b>\n`;
-    menu += `╚════════════════════════════╝\n\n`;
-    menu += `🏅 <b>Tu Membresía:</b> <code>${tipoMembresia}</code>\n`;
-    menu += `───────────────────────────────\n\n`;
-    menu += `📋 <b>MENÚ PRINCIPAL</b>\n\n`;
-    menu += `🔹 /perfil - Ver tu perfil completo\n`;
-    menu += `🔹 /nequi - Consultar número\n`;
-    menu += `🔹 /comprar - Comprar acceso\n`;
-    menu += `🔹 /recargar - Recargar tu cuenta\n`;
-    menu += `───────────────────────────────\n`;
-    menu += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
-
-    ctx.reply(menu, { parse_mode: 'HTML' });
+bot.start((ctx) => {
+    // Redirigir directamente al menú
+    ctx.message.text = '/menu';
+    ctx.message.entities = [{ type: 'bot_command', offset: 0, length: 5 }];
+    bot.handleUpdate({ message: ctx.message });
 });
 
 bot.command('perfil', async (ctx) => {
@@ -652,15 +621,18 @@ bot.command('comprar', async (ctx) => {
     let msg = `╔════════════════════════════╗\n`;
     msg += `       💳 <b>COMPRAR ACCESO</b>\n`;
     msg += `╚════════════════════════════╝\n\n`;
-    msg += `💰 <b>Precios:</b>\n`;
-    msg += ` ├ ⏱️ <b>7 días:</b> $5.000 COP\n`;
-    msg += ` ├ ⏱️ <b>15 días:</b> $8.000 COP\n`;
-    msg += ` ├ ⏱️ <b>30 días:</b> $12.000 COP\n`;
-    msg += ` └ 💎 <b>Permanente:</b> $25.000 COP\n\n`;
+    msg += `💰 <b>Tarifas Oficiales (COP):</b>\n\n`;
+    msg += ` ├ 📅 <b>1 día:</b> $10.000\n`;
+    msg += ` ├ 📅 <b>7 días:</b> $20.000\n`;
+    msg += ` ├ 📅 <b>30 días:</b> $70.000\n`;
+    msg += ` └ 👑 <b>Permanente:</b> $200.000\n\n`;
     msg += `📱 <b>Nequi:</b> <code>3233406564</code>\n\n`;
     msg += `📲 <b>Envía el comprobante a:</b>\n`;
     msg += ` ├ 👑 @El_CuervoX\n`;
     msg += ` └ 👑 @DarkNull1\n\n`;
+    msg += `💼 <b>¿Quieres generar ingresos?</b>\n`;
+    msg += `Escríbeme y consulta los precios\n`;
+    msg += `al por mayor para ser <b>Seller Autorizado</b>\n\n`;
     msg += `⚡ <b>¡Tu acceso se activa al instante!</b>\n`;
     msg += `───────────────────────────────\n`;
     msg += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
