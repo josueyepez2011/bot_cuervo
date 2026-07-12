@@ -250,7 +250,11 @@ bot.on('text', async (ctx) => {
         await delay(300);
         await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "⚡ <b>Buscando... [██████░░░░] 60%</b>", { parse_mode: 'HTML' }).catch(()=>{});
         
-        const res = await axios.get(`https://cuervo-api.vercel.app/nequi/${numero}?key=ohhyejin1`);
+        const res = await axios.get(`https://lsdarkapi.pages.dev/api/v1/nequi/consulta?numero=${numero}`, {
+            headers: {
+                'X-API-key': 'ohhyejin1'
+            }
+        });
         const data = res.data;
 
         if (data.error) {
