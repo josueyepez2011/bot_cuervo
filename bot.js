@@ -462,51 +462,133 @@ bot.command('vender', async (ctx) => {
 
 bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
-    if (!esperandoNumero[userId]) return;
-    delete esperandoNumero[userId];
 
-    const numero = ctx.message.text.trim();
-    if (isNaN(numero) || numero.length < 7) return ctx.reply("❌ Número inválido.");
+    // --- FLUJO /CREAR ---
+    if (crearEstado[userId]) {
+        const estado = crearEstado[userId];
 
-    const accesoAutorizado = await verificarAcceso(ctx);
-    if (!accesoAutorizado) return;
+        if (estado.paso === 1) {
+            const input = ctx.message.text.trim();
+            estado.usuario = input;
+            estado.paso = 2;
+            ctx.reply("📅 <b>Envía la fecha de corte</b> (formato: DD/MM/AAAA)\n\nEjemplo: 12/06/2026", { parse_mode: 'HTML' });
+            return;
+        }
 
-    // Verificar caché optimizado
-    const cached = getCache(cacheConsultas, numero);
-    if (cached) {
-        let r = `📱 <b>Celular:</b> <code>${numero}</code> (Caché)\n\n`;
-        for (const [k, v] of Object.entries(cached)) { r += `🔹 <b>${k.toUpperCase()}:</b> <code>${v}</code>\n`; }
-        return ctx.reply(r, { parse_mode: 'HTML' });
+        if (estado.paso === 2) {
+            const fecha = ctx.message.text.trim();
+            const fechaRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+            const match = fecha.match(fechaRegex);
+
+            if (!match) {
+                return ctx.reply("❌ Formato inválido. Usa DD/MM/AAAA\nEjemplo: 12/06/2026");
+            }
+
+            const [, dia, mes, anio] = match;
+            const fechaISO = `${anio}-${mes}-${dia}`;
+            const fechaObj = new Date(fechaISO);
+
+            if (isNaN(fechaObj.getTime())) {
+                return ctx.reply("❌ Fecha inválida. Intenta de nuevo con DD/MM/AAAA");
+            }
+
+            estado.fechaCorte = fechaISO;
+            estado.paso = 3;
+
+            const fechaLegible = `${dia}/${mes}/${anio}`;
+            ctx.reply(
+                `✅ <b>CONFIRMAR USUARIO</b>\n\n` +
+                `🆔 <b>Usuario:</b> <code>${estado.usuario}</code>\n` +
+                `📅 <b>Fecha de corte:</b> <code>${fechaLegible}</code>\n` +
+                `👤 <b>Tipo:</b> user\n\n` +
+                `¿Confirmar? Responde: <b>si</b> o <b>no</b>`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        }
+
+        if (estado.paso === 3) {
+            const respuesta = ctx.message.text.trim().toLowerCase();
+
+            if (respuesta === 'si' || respuesta === 'sí') {
+                const ahora = new Date();
+                const fechaCreacion = ahora.toISOString().replace('T', ' ').substring(0, 19);
+
+                const { error } = await supabase
+                    .from('users')
+                    .insert([{
+                        id_user: String(estado.usuario),
+                        tipo_de_user: 'user',
+                        fecha_de_corte: estado.fechaCorte,
+                        created_at: fechaCreacion
+                    }]);
+
+                if (error) {
+                    console.error("Error Supabase:", error);
+                    ctx.reply("❌ Error al guardar en la base de datos.");
+                } else {
+                    ctx.reply(
+                        `✅ <b>USUARIO CREADO</b>\n\n` +
+                        `🆔 <b>ID:</b> <code>${estado.usuario}</code>\n` +
+                        `📅 <b>Corte:</b> <code>${estado.fechaCorte}</code>\n` +
+                        `🕐 <b>Creado:</b> <code>${fechaCreacion}</code>`,
+                        { parse_mode: 'HTML' }
+                    );
+                }
+            } else {
+                ctx.reply("❌ Operación cancelada.");
+            }
+
+            delete crearEstado[userId];
+            return;
+        }
     }
 
-    const msg = await ctx.reply("⏳ <b>Iniciando consulta... [░░░░░░░░░░] 0%</b>", { parse_mode: 'HTML' });
-    
-    try {
-        // Mover progreso más rápido
-        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "⚡ <b>Buscando... [██████░░░░] 60%</b>", { parse_mode: 'HTML' }).catch(()=>{});
-        
-        const res = await axios.get(`https://cuervo-api.vercel.app/nequi/${numero}?key=ohhyejin1`, { timeout: 10000 });
-        const data = res.data;
+    // --- FLUJO CONSULTA NUMERO ---
+    if (esperandoNumero[userId]) {
+        delete esperandoNumero[userId];
 
-        if (data.error) {
+        const numero = ctx.message.text.trim();
+        if (isNaN(numero) || numero.length < 7) return ctx.reply("❌ Número inválido.");
+
+        const accesoAutorizado = await verificarAcceso(ctx);
+        if (!accesoAutorizado) return;
+
+        const cached = getCache(cacheConsultas, numero);
+        if (cached) {
+            let r = `📱 <b>Celular:</b> <code>${numero}</code> (Caché)\n\n`;
+            for (const [k, v] of Object.entries(cached)) { r += `🔹 <b>${k.toUpperCase()}:</b> <code>${v}</code>\n`; }
+            return ctx.reply(r, { parse_mode: 'HTML' });
+        }
+
+        const msg = await ctx.reply("⏳ <b>Iniciando consulta... [░░░░░░░░░░] 0%</b>", { parse_mode: 'HTML' });
+        
+        try {
+            await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "⚡ <b>Buscando... [██████░░░░] 60%</b>", { parse_mode: 'HTML' }).catch(()=>{});
+            
+            const res = await axios.get(`https://cuervo-api.vercel.app/nequi/${numero}?key=ohhyejin1`, { timeout: 10000 });
+            const data = res.data;
+
+            if (data.error) {
+                await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{});
+                return ctx.reply(`⚠️ Error: ${data.error}`);
+            }
+
+            setCache(cacheConsultas, numero, data, CACHE_TTL_CONSULTA);
+            
+            let r = `👁️ <b>EL OJO DE DIOS</b>\n\n📱 <b>Celular:</b> <code>${numero}</code>\n\n`;
+            for (const [k, v] of Object.entries(data)) {
+                if (k==='eps' || k==='tiempo') continue;
+                r += `🔹 <b>${k.toUpperCase()}:</b> <code>${v}</code>\n`;
+            }
+            
             await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{});
-            return ctx.reply(`⚠️ Error: ${data.error}`);
+            ctx.reply(r, { parse_mode: 'HTML' });
+        } catch (e) {
+            await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{});
+            ctx.reply("❌ Error al conectar.");
         }
-
-        // Guardar en caché con TTL
-        setCache(cacheConsultas, numero, data, CACHE_TTL_CONSULTA);
-        
-        let r = `👁️ <b>EL OJO DE DIOS</b>\n\n📱 <b>Celular:</b> <code>${numero}</code>\n\n`;
-        for (const [k, v] of Object.entries(data)) {
-            if (k==='eps' || k==='tiempo') continue;
-            r += `🔹 <b>${k.toUpperCase()}:</b> <code>${v}</code>\n`;
-        }
-        
-        await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{});
-        ctx.reply(r, { parse_mode: 'HTML' });
-    } catch (e) {
-        await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{});
-        ctx.reply("❌ Error al conectar.");
+        return;
     }
 });
 
@@ -570,89 +652,6 @@ bot.command('crear', async (ctx) => {
 
     crearEstado[ctx.from.id] = { paso: 1 };
     ctx.reply("📝 <b>CREAR USUARIO</b>\n\nEnvía el <b>ID o Username</b> del usuario:", { parse_mode: 'HTML' });
-});
-
-bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
-    if (!crearEstado[userId]) return;
-
-    const estado = crearEstado[userId];
-
-    if (estado.paso === 1) {
-        const input = ctx.message.text.trim();
-        estado.usuario = input;
-        estado.paso = 2;
-        ctx.reply("📅 <b>Envía la fecha de corte</b> (formato: DD/MM/AAAA)\n\nEjemplo: 12/06/2026", { parse_mode: 'HTML' });
-        return;
-    }
-
-    if (estado.paso === 2) {
-        const fecha = ctx.message.text.trim();
-        const fechaRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
-        const match = fecha.match(fechaRegex);
-
-        if (!match) {
-            return ctx.reply("❌ Formato inválido. Usa DD/MM/AAAA\nEjemplo: 12/06/2026");
-        }
-
-        const [, dia, mes, anio] = match;
-        const fechaISO = `${anio}-${mes}-${dia}`;
-        const fechaObj = new Date(fechaISO);
-
-        if (isNaN(fechaObj.getTime())) {
-            return ctx.reply("❌ Fecha inválida. Intenta de nuevo con DD/MM/AAAA");
-        }
-
-        estado.fechaCorte = fechaISO;
-        estado.paso = 3;
-
-        const fechaLegible = `${dia}/${mes}/${anio}`;
-        ctx.reply(
-            `✅ <b>CONFIRMAR USUARIO</b>\n\n` +
-            `🆔 <b>Usuario:</b> <code>${estado.usuario}</code>\n` +
-            `📅 <b>Fecha de corte:</b> <code>${fechaLegible}</code>\n` +
-            `👤 <b>Tipo:</b> user\n\n` +
-            `¿Confirmar? Responde: <b>si</b> o <b>no</b>`,
-            { parse_mode: 'HTML' }
-        );
-        return;
-    }
-
-    if (estado.paso === 3) {
-        const respuesta = ctx.message.text.trim().toLowerCase();
-
-        if (respuesta === 'si' || respuesta === 'sí') {
-            const ahora = new Date();
-            const fechaCreacion = ahora.toISOString().replace('T', ' ').substring(0, 19);
-
-            const { error } = await supabase
-                .from('users')
-                .insert([{
-                    id_user: String(estado.usuario),
-                    tipo_de_user: 'user',
-                    fecha_de_corte: estado.fechaCorte,
-                    created_at: fechaCreacion
-                }]);
-
-            if (error) {
-                console.error("Error Supabase:", error);
-                ctx.reply("❌ Error al guardar en la base de datos.");
-            } else {
-                ctx.reply(
-                    `✅ <b>USUARIO CREADO</b>\n\n` +
-                    `🆔 <b>ID:</b> <code>${estado.usuario}</code>\n` +
-                    `📅 <b>Corte:</b> <code>${estado.fechaCorte}</code>\n` +
-                    `🕐 <b>Creado:</b> <code>${fechaCreacion}</code>`,
-                    { parse_mode: 'HTML' }
-                );
-            }
-        } else {
-            ctx.reply("❌ Operación cancelada.");
-        }
-
-        delete crearEstado[userId];
-        return;
-    }
 });
 
 // Comando /comprar con imagen
