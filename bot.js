@@ -2,6 +2,9 @@ const { Telegraf } = require('telegraf');
 const axios = require('axios');
 const { Pool } = require('pg');
 const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+const path = require('path');
+const fs = require('fs');
 
 // Token oficial NUEVO y actualizado
 const bot = new Telegraf('8664870579:AAH-H8QYIA5qIA5z4HfszktMNI9viBDj08E'); 
@@ -20,6 +23,11 @@ const pool = new Pool({
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
 });
+
+// Conexión a Supabase
+const SUPABASE_URL = "https://gactklxmkxmvirmsustj.supabase.co";
+const SUPABASE_KEY = "sb_publishable_T4hxvg-E8GeCUwuStwR_pg_vZI5O1ZH";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Control de estados en memoria (temporal por consulta)
 const esperandoNumero = {};
@@ -515,3 +523,282 @@ app.listen(PORT, () => {
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////// NUEVA FUNCIONALIDAD - SUPABASE //////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Estados para el comando /crear
+const crearEstado = {};
+
+// Verificar acceso por Supabase (fecha_de_corte)
+async function verificarAccesoSupabase(userId) {
+    try {
+        const { data, error } = await supabase
+            .from('users')
+            .select('fecha_de_corte, tipo_de_user')
+            .eq('id_user', String(userId))
+            .single();
+
+        if (error || !data) return { acceso: false, razon: 'no_existe' };
+
+        const fechaCorte = new Date(data.fecha_de_corte);
+        const hoy = new Date();
+        hoy.setHours(0, 0, 0, 0);
+
+        if (fechaCorte < hoy) {
+            return { acceso: false, razon: 'expirado', fecha: data.fecha_de_corte };
+        }
+
+        return { acceso: true, tipo: data.tipo_de_user, fecha: data.fecha_de_corte };
+    } catch (e) {
+        return { acceso: false, razon: 'error' };
+    }
+}
+
+// Comando /crear (solo Owners)
+bot.command('crear', async (ctx) => {
+    if (!OWNER_IDS.includes(ctx.from.id)) return ctx.reply("❌ Solo los Owners pueden usar este comando.");
+
+    crearEstado[ctx.from.id] = { paso: 1 };
+    ctx.reply("📝 <b>CREAR USUARIO</b>\n\nEnvía el <b>ID o Username</b> del usuario:", { parse_mode: 'HTML' });
+});
+
+bot.on('text', async (ctx) => {
+    const userId = ctx.from.id;
+    if (!crearEstado[userId]) return;
+
+    const estado = crearEstado[userId];
+
+    if (estado.paso === 1) {
+        const input = ctx.message.text.trim();
+        estado.usuario = input;
+        estado.paso = 2;
+        ctx.reply("📅 <b>Envía la fecha de corte</b> (formato: DD/MM/AAAA)\n\nEjemplo: 12/06/2026", { parse_mode: 'HTML' });
+        return;
+    }
+
+    if (estado.paso === 2) {
+        const fecha = ctx.message.text.trim();
+        const fechaRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+        const match = fecha.match(fechaRegex);
+
+        if (!match) {
+            return ctx.reply("❌ Formato inválido. Usa DD/MM/AAAA\nEjemplo: 12/06/2026");
+        }
+
+        const [, dia, mes, anio] = match;
+        const fechaISO = `${anio}-${mes}-${dia}`;
+        const fechaObj = new Date(fechaISO);
+
+        if (isNaN(fechaObj.getTime())) {
+            return ctx.reply("❌ Fecha inválida. Intenta de nuevo con DD/MM/AAAA");
+        }
+
+        estado.fechaCorte = fechaISO;
+        estado.paso = 3;
+
+        const fechaLegible = `${dia}/${mes}/${anio}`;
+        ctx.reply(
+            `✅ <b>CONFIRMAR USUARIO</b>\n\n` +
+            `🆔 <b>Usuario:</b> <code>${estado.usuario}</code>\n` +
+            `📅 <b>Fecha de corte:</b> <code>${fechaLegible}</code>\n` +
+            `👤 <b>Tipo:</b> user\n\n` +
+            `¿Confirmar? Responde: <b>si</b> o <b>no</b>`,
+            { parse_mode: 'HTML' }
+        );
+        return;
+    }
+
+    if (estado.paso === 3) {
+        const respuesta = ctx.message.text.trim().toLowerCase();
+
+        if (respuesta === 'si' || respuesta === 'sí') {
+            const ahora = new Date();
+            const fechaCreacion = ahora.toISOString().replace('T', ' ').substring(0, 19);
+
+            const { error } = await supabase
+                .from('users')
+                .insert([{
+                    id_user: String(estado.usuario),
+                    tipo_de_user: 'user',
+                    fecha_de_corte: estado.fechaCorte,
+                    created_at: fechaCreacion
+                }]);
+
+            if (error) {
+                console.error("Error Supabase:", error);
+                ctx.reply("❌ Error al guardar en la base de datos.");
+            } else {
+                ctx.reply(
+                    `✅ <b>USUARIO CREADO</b>\n\n` +
+                    `🆔 <b>ID:</b> <code>${estado.usuario}</code>\n` +
+                    `📅 <b>Corte:</b> <code>${estado.fechaCorte}</code>\n` +
+                    `🕐 <b>Creado:</b> <code>${fechaCreacion}</code>`,
+                    { parse_mode: 'HTML' }
+                );
+            }
+        } else {
+            ctx.reply("❌ Operación cancelada.");
+        }
+
+        delete crearEstado[userId];
+        return;
+    }
+});
+
+// Comando /comprar con imagen
+bot.command('comprar', async (ctx) => {
+    let msg = `╔════════════════════════════╗\n`;
+    msg += `       💳 <b>COMPRAR ACCESO</b>\n`;
+    msg += `╚════════════════════════════╝\n\n`;
+    msg += `💰 <b>Precios:</b>\n`;
+    msg += ` ├ ⏱️ <b>7 días:</b> $5.000 COP\n`;
+    msg += ` ├ ⏱️ <b>15 días:</b> $8.000 COP\n`;
+    msg += ` ├ ⏱️ <b>30 días:</b> $12.000 COP\n`;
+    msg += ` └ 💎 <b>Permanente:</b> $25.000 COP\n\n`;
+    msg += `📱 <b>Nequi:</b> <code>3233406564</code>\n\n`;
+    msg += `📲 <b>Envía el comprobante a:</b>\n`;
+    msg += ` ├ 👑 @El_CuervoX\n`;
+    msg += ` └ 👑 @DarkNull1\n\n`;
+    msg += `⚡ <b>¡Tu acceso se activa al instante!</b>\n`;
+    msg += `───────────────────────────────\n`;
+    msg += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    // Enviar imagen si existe
+    const imagenPath = path.join(__dirname, 'assets', 'imagen.png');
+    if (fs.existsSync(imagenPath)) {
+        await ctx.replyWithPhoto({ source: imagenPath }, { caption: msg, parse_mode: 'HTML' });
+    } else {
+        ctx.reply(msg, { parse_mode: 'HTML' });
+    }
+});
+
+// Comando /recargar
+bot.command('recargar', (ctx) => {
+    let msg = `╔════════════════════════════╗\n`;
+    msg += `       🔄 <b>RECARGAR CUENTA</b>\n`;
+    msg += `╚════════════════════════════╝\n\n`;
+    msg += `💳 <b>Pagos aceptados:</b>\n\n`;
+    msg += `📱 <b>Nequi:</b> <code>3233406564</code>\n\n`;
+    msg += `📲 <b>Envía tu comprobante a:</b>\n`;
+    msg += ` ├ 👑 @El_CuervoX\n`;
+    msg += ` └ 👑 @DarkNull1\n\n`;
+    msg += `📝 <b>Incluye tu ID:</b> <code>${ctx.from.id}</code>\n\n`;
+    msg += `⚡ <b>Se confirma en menos de 5 min</b>\n`;
+    msg += `───────────────────────────────\n`;
+    msg += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(msg, { parse_mode: 'HTML' });
+});
+
+// Comando /perfil actualizado con Supabase
+bot.command('perfil', async (ctx) => {
+    const userId = ctx.from.id;
+    const username = ctx.from.username ? `@${ctx.from.username}` : "Sin username";
+    const nombre = `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
+
+    let tipoMembresia = "❌ Sin acceso";
+    let fechaActivacion = "N/A";
+    let fechaExpiracion = "N/A";
+
+    if (OWNER_IDS.includes(userId)) {
+        tipoMembresia = "👑 Owner / Creador";
+        fechaActivacion = "∞ Permanente";
+        fechaExpiracion = "∞ Permanente";
+    } else {
+        // Verificar en Supabase
+        const acceso = await verificarAccesoSupabase(userId);
+        if (acceso.acceso) {
+            tipoMembresia = "💎 Usuario Activo";
+            fechaExpiracion = acceso.fecha;
+        } else if (acceso.razon === 'expirado') {
+            tipoMembresia = "❌ Membresía Expirada";
+            fechaExpiracion = acceso.fecha + " (Expirado)";
+        } else {
+            // Verificar en PostgreSQL (sellers)
+            try {
+                const result = await pool.query(
+                    `SELECT (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller`,
+                    [userId]
+                );
+                if (result.rows[0]?.es_seller) {
+                    tipoMembresia = "💼 Seller / Vendedor";
+                    fechaActivacion = "∞";
+                    fechaExpiracion = "∞";
+                }
+            } catch (e) {}
+        }
+
+        // Obtener fecha de creación de Supabase
+        try {
+            const { data } = await supabase
+                .from('users')
+                .select('created_at')
+                .eq('id_user', String(userId))
+                .single();
+            if (data?.created_at) fechaActivacion = data.created_at;
+        } catch (e) {}
+    }
+
+    let perfil = `╔════════════════════════════╗\n`;
+    perfil += `       👤 <b>MI PERFIL</b>\n`;
+    perfil += `╚════════════════════════════╝\n\n`;
+    perfil += `🆔 <b>ID:</b> <code>${userId}</code>\n`;
+    perfil += `👤 <b>Username:</b> ${username}\n`;
+    perfil += `📝 <b>Nombre:</b> <code>${nombre}</code>\n`;
+    perfil += `🏅 <b>Membresía:</b> <b>${tipoMembresia}</b>\n`;
+    perfil += `📅 <b>Activado:</b> <code>${fechaActivacion}</code>\n`;
+    perfil += `⏳ <b>Expira:</b> <code>${fechaExpiracion}</code>\n`;
+    perfil += `───────────────────────────────\n`;
+    perfil += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(perfil, { parse_mode: 'HTML' });
+});
+
+// Comando /menu actualizado
+bot.command('menu', async (ctx) => {
+    const userId = ctx.from.id;
+    let tipoMembresia = "❌ Sin acceso";
+
+    if (OWNER_IDS.includes(userId)) {
+        tipoMembresia = "👑 Owner";
+    } else {
+        const acceso = await verificarAccesoSupabase(userId);
+        if (acceso.acceso) tipoMembresia = "💎 Activo";
+        else if (acceso.razon === 'expirado') tipoMembresia = "❌ Expirado";
+        else {
+            try {
+                const result = await pool.query(
+                    `SELECT (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller`,
+                    [userId]
+                );
+                if (result.rows[0]?.es_seller) tipoMembresia = "💼 Seller";
+            } catch (e) {}
+        }
+    }
+
+    let menu = `╔════════════════════════════╗\n`;
+    menu += `       👁️ <b>EL OJO DE DIOS</b>\n`;
+    menu += `╚════════════════════════════╝\n\n`;
+    menu += `🏅 <b>Tu Membresía:</b> <code>${tipoMembresia}</code>\n`;
+    menu += `───────────────────────────────\n\n`;
+    menu += `📋 <b>MENÚ PRINCIPAL</b>\n\n`;
+    menu += `🔹 /perfil - Ver tu perfil completo\n`;
+    menu += `🔹 /nequi - Consultar número\n`;
+    menu += `🔹 /comprar - Comprar acceso\n`;
+    menu += `🔹 /recargar - Recargar tu cuenta\n`;
+
+    if (OWNER_IDS.includes(userId)) {
+        menu += `───────────────────────────────\n\n`;
+        menu += `👑 <b>ADMIN</b>\n\n`;
+        menu += `🔹 /crear - Crear usuario\n`;
+        menu += `🔹 /panel - Panel de control\n`;
+        menu += `🔹 /lista - Ver base de datos\n`;
+    }
+
+    menu += `───────────────────────────────\n`;
+    menu += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(menu, { parse_mode: 'HTML' });
+});
