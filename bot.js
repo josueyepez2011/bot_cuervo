@@ -666,7 +666,7 @@ bot.command('comprar', async (ctx) => {
     msg += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
 
     // Enviar imagen si existe
-    const imagenPath = path.join(__dirname, 'assets', 'imagen.png');
+    const imagenPath = path.join(__dirname, 'assets', 'imagen.jpg');
     if (fs.existsSync(imagenPath)) {
         await ctx.replyWithPhoto({ source: imagenPath }, { caption: msg, parse_mode: 'HTML' });
     } else {
