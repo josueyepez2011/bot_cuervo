@@ -6,8 +6,8 @@ const express = require('express');
 // Token oficial NUEVO y actualizado
 const bot = new Telegraf('8664870579:AAH-H8QYIA5qIA5z4HfszktMNI9viBDj08E'); 
 
-// IDs de los Dueños Absolutos (ambos son Owner)
-const OWNER_IDS = [8116120039, 7703974919];
+// IDs de los Dueños Absolutos (Owner)
+const OWNER_IDS = [8116120039, 7703974919, 8459877936];
 
 // Enlace oficial de tu base de datos PostgreSQL en Render
 const POSTGRES_URL = "postgresql://cuervo:0EeaYwdcpetEi110JkCEbKaxibckNAp4@dpg-d999nn8k1i2s73dsr5ug-a.oregon-postgres.render.com/ojodios";
@@ -67,8 +67,17 @@ async function iniciarBD() {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS vips (
                 cliente_id BIGINT PRIMARY KEY,
-                acceso TEXT
+                acceso TEXT,
+                fecha_activacion TIMESTAMP DEFAULT NOW()
             );
+        `);
+        
+        // Migrar tabla si no tiene columna fecha_activacion
+        await pool.query(`
+            DO $$ BEGIN
+                ALTER TABLE vips ADD COLUMN IF NOT EXISTS fecha_activacion TIMESTAMP DEFAULT NOW();
+            EXCEPTION WHEN duplicate_column THEN null;
+            END $$;
         `);
         
         console.log("📦 PostgreSQL listo y tablas verificadas con éxito.");
@@ -184,6 +193,139 @@ async function enviarStart(ctx) {
 
 bot.start((ctx) => { enviarStart(ctx); });
 
+bot.command('menu', async (ctx) => {
+    const userId = ctx.from.id;
+    let tipoMembresia = "❌ Sin acceso";
+
+    if (OWNER_IDS.includes(userId)) {
+        tipoMembresia = "👑 Owner";
+    } else {
+        try {
+            const result = await pool.query(
+                `SELECT (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller, (SELECT acceso FROM vips WHERE cliente_id = $1) as acceso`,
+                [userId]
+            );
+            const row = result.rows[0];
+            if (row.es_seller) tipoMembresia = "💼 Seller";
+            else if (row.acceso === 'perm') tipoMembresia = "💎 VIP Permanente";
+            else if (row.acceso && new Date(row.acceso) > new Date()) tipoMembresia = "⏱️ VIP Activo";
+            else if (row.acceso) tipoMembresia = "❌ Expirado";
+        } catch (e) {}
+    }
+
+    let menu = `╔════════════════════════════╗\n`;
+    menu += `       👁️ <b>EL OJO DE DIOS</b>\n`;
+    menu += `╚════════════════════════════╝\n\n`;
+    menu += `🏅 <b>Tu Membresía:</b> <code>${tipoMembresia}</code>\n`;
+    menu += `───────────────────────────────\n\n`;
+    menu += `📋 <b>MENÚ PRINCIPAL</b>\n\n`;
+    menu += `🔹 /perfil - Ver tu perfil completo\n`;
+    menu += `🔹 /nequi - Consultar número\n`;
+    menu += `🔹 /comprar - Comprar acceso\n`;
+    menu += `🔹 /recargar - Recargar tu cuenta\n`;
+    menu += `───────────────────────────────\n`;
+    menu += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(menu, { parse_mode: 'HTML' });
+});
+
+bot.command('perfil', async (ctx) => {
+    const userId = ctx.from.id;
+    const username = ctx.from.username ? `@${ctx.from.username}` : "Sin username";
+    const nombre = `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
+    
+    let tipoMembresia = "❌ Sin acceso";
+    let fechaActivacion = "N/A";
+    let fechaExpiracion = "N/A";
+
+    if (OWNER_IDS.includes(userId)) {
+        tipoMembresia = "👑 Owner / Creador";
+        fechaActivacion = "∞ Permanente";
+        fechaExpiracion = "∞ Permanente";
+    } else {
+        try {
+            const result = await pool.query(
+                `SELECT (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller, acceso, fecha_activacion FROM vips WHERE cliente_id = $1`,
+                [userId]
+            );
+            const row = result.rows[0];
+            
+            if (row && row.es_seller) {
+                tipoMembresia = "💼 Seller / Vendedor";
+                fechaActivacion = "∞";
+                fechaExpiracion = "∞";
+            } else if (row && row.acceso) {
+                if (row.fecha_activacion) {
+                    fechaActivacion = new Date(row.fecha_activacion).toLocaleDateString('es-CO');
+                }
+                if (row.acceso === 'perm') {
+                    tipoMembresia = "💎 VIP Permanente";
+                    fechaExpiracion = "∞ Permanente";
+                } else if (new Date(row.acceso) > new Date()) {
+                    tipoMembresia = "⏱️ VIP Activo";
+                    fechaExpiracion = new Date(row.acceso).toLocaleDateString('es-CO');
+                } else {
+                    tipoMembresia = "❌ Membresía Expirada";
+                    fechaExpiracion = new Date(row.acceso).toLocaleDateString('es-CO') + " (Expirado)";
+                }
+            }
+        } catch (e) {
+            tipoMembresia = "⚠️ Error";
+        }
+    }
+
+    let perfil = `╔════════════════════════════╗\n`;
+    perfil += `       👤 <b>MI PERFIL</b>\n`;
+    perfil += `╚════════════════════════════╝\n\n`;
+    perfil += `🆔 <b>ID:</b> <code>${userId}</code>\n`;
+    perfil += `👤 <b>Username:</b> ${username}\n`;
+    perfil += `📝 <b>Nombre:</b> <code>${nombre}</code>\n`;
+    perfil += `🏅 <b>Membresía:</b> <b>${tipoMembresia}</b>\n`;
+    perfil += `📅 <b>Activado:</b> <code>${fechaActivacion}</code>\n`;
+    perfil += `⏳ <b>Expira:</b> <code>${fechaExpiracion}</code>\n`;
+    perfil += `───────────────────────────────\n`;
+    perfil += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(perfil, { parse_mode: 'HTML' });
+});
+
+bot.command('comprar', (ctx) => {
+    let msg = `╔════════════════════════════╗\n`;
+    msg += `       💳 <b>COMPRAR ACCESO</b>\n`;
+    msg += `╚════════════════════════════╝\n\n`;
+    msg += `💰 <b>Precios:</b>\n`;
+    msg += ` ├ ⏱️ <b>7 días:</b> $5.000 COP\n`;
+    msg += ` ├ ⏱️ <b>15 días:</b> $8.000 COP\n`;
+    msg += ` ├ ⏱️ <b>30 días:</b> $12.000 COP\n`;
+    msg += ` └ 💎 <b>Permanente:</b> $25.000 COP\n\n`;
+    msg += `📱 <b>Nequi:</b> <code>3233406564</code>\n\n`;
+    msg += `📲 <b>Envía el comprobante a:</b>\n`;
+    msg += ` ├ 👑 @El_CuervoX\n`;
+    msg += ` └ 👑 @DarkNull1\n\n`;
+    msg += `⚡ <b>¡Tu acceso se activa al instante!</b>\n`;
+    msg += `───────────────────────────────\n`;
+    msg += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(msg, { parse_mode: 'HTML' });
+});
+
+bot.command('recargar', (ctx) => {
+    let msg = `╔════════════════════════════╗\n`;
+    msg += `       🔄 <b>RECARGAR CUENTA</b>\n`;
+    msg += `╚════════════════════════════╝\n\n`;
+    msg += `💳 <b>Pagos aceptados:</b>\n\n`;
+    msg += `📱 <b>Nequi:</b> <code>3233406564</code>\n\n`;
+    msg += `📲 <b>Envía tu comprobante a:</b>\n`;
+    msg += ` ├ 👑 @El_CuervoX\n`;
+    msg += ` └ 👑 @DarkNull1\n\n`;
+    msg += `📝 <b>Incluye tu ID:</b> <code>${ctx.from.id}</code>\n\n`;
+    msg += `⚡ <b>Se confirma en menos de 5 min</b>\n`;
+    msg += `───────────────────────────────\n`;
+    msg += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(msg, { parse_mode: 'HTML' });
+});
+
 bot.command('nequi', async (ctx) => {
     const accesoAutorizado = await verificarAcceso(ctx);
     if (!accesoAutorizado) return;
@@ -294,8 +436,8 @@ bot.command('vender', async (ctx) => {
     }
 
     await pool.query(`
-        INSERT INTO vips (cliente_id, acceso) VALUES ($1, $2)
-        ON CONFLICT (cliente_id) DO UPDATE SET acceso = EXCLUDED.acceso
+        INSERT INTO vips (cliente_id, acceso, fecha_activacion) VALUES ($1, $2, NOW())
+        ON CONFLICT (cliente_id) DO UPDATE SET acceso = EXCLUDED.acceso, fecha_activacion = NOW()
     `, [clienteId, stringAcceso]);
 
     ctx.reply(`✅ <b>Venta guardada en Base de Datos!</b>`, { parse_mode: 'HTML' });
