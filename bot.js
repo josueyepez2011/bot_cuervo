@@ -80,13 +80,7 @@ async function iniciarBD() {
             );
         `);
         
-        // Migrar tabla si no tiene columna fecha_activacion
-        await pool.query(`
-            DO $$ BEGIN
-                ALTER TABLE vips ADD COLUMN IF NOT EXISTS fecha_activacion TIMESTAMP DEFAULT NOW();
-            EXCEPTION WHEN duplicate_column THEN null;
-            END $$;
-        `);
+  
         
         console.log("📦 PostgreSQL listo y tablas verificadas con éxito.");
     } catch (err) {
