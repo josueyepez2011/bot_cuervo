@@ -199,11 +199,50 @@ async function enviarStart(ctx) {
     ctx.reply(bienvenidaPanel, { parse_mode: 'HTML' });
 }
 
-bot.start((ctx) => {
-    // Redirigir directamente al menú
-    ctx.message.text = '/menu';
-    ctx.message.entities = [{ type: 'bot_command', offset: 0, length: 5 }];
-    bot.handleUpdate({ message: ctx.message });
+bot.start(async (ctx) => {
+    const userId = ctx.from.id;
+    let tipoMembresia = "❌ Sin acceso";
+
+    if (OWNER_IDS.includes(userId)) {
+        tipoMembresia = "👑 Owner";
+    } else {
+        const acceso = await verificarAccesoSupabase(userId);
+        if (acceso.acceso) tipoMembresia = "💎 Activo";
+        else if (acceso.razon === 'expirado') tipoMembresia = "❌ Expirado";
+        else {
+            try {
+                const result = await pool.query(
+                    `SELECT (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller`,
+                    [userId]
+                );
+                if (result.rows[0]?.es_seller) tipoMembresia = "💼 Seller";
+            } catch (e) {}
+        }
+    }
+
+    let menu = `╔════════════════════════════╗\n`;
+    menu += `       👁️ <b>EL OJO DE DIOS</b>\n`;
+    menu += `╚════════════════════════════╝\n\n`;
+    menu += `🏅 <b>Tu Membresía:</b> <code>${tipoMembresia}</code>\n`;
+    menu += `───────────────────────────────\n\n`;
+    menu += `📋 <b>MENÚ PRINCIPAL</b>\n\n`;
+    menu += `🔹 /perfil - Ver tu perfil completo\n`;
+    menu += `🔹 /nequi - Consultar número\n`;
+    menu += `🔹 /comprar - Comprar acceso\n`;
+    menu += `🔹 /recargar - Recargar tu cuenta\n`;
+
+    if (OWNER_IDS.includes(userId)) {
+        menu += `───────────────────────────────\n\n`;
+        menu += `👑 <b>ADMIN</b>\n\n`;
+        menu += `🔹 /crear - Crear usuario\n`;
+        menu += `🔹 /panel - Panel de control\n`;
+        menu += `🔹 /lista - Ver base de datos\n`;
+    }
+
+    menu += `───────────────────────────────\n`;
+    menu += `✨ <b>by @El_CuervoX & @DarkNull1</b>`;
+
+    ctx.reply(menu, { parse_mode: 'HTML' });
 });
 
 bot.command('perfil', async (ctx) => {
@@ -473,7 +512,7 @@ bot.on('text', async (ctx) => {
 
 // --- CONFIGURACIÓN DE PUERTO (EXPRESS) ---
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.get('/', (req, res) => {
     res.send('Bot Activo');
