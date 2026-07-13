@@ -1117,10 +1117,13 @@ bot.on('text', async (ctx) => {
 
     const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
 
-    const apiPromise = axios.get(`https://lsdarkapi.pages.dev/api/v1/nequi/consulta?numero=${numero}`, {
-        headers: { 'X-API-Key': '4b5659c0efe6897940606d8b1b67f020c8ee5e6d313d11094765a26fd8138e11' },
-        timeout: 15000
-    });
+    const apiPromise = axios.post(`https://lsdarkapi.pages.dev/api/v1/nequi/consulta`,
+        { numero },
+        {
+            headers: { 'X-API-Key': '4b5659c0efe6897940606d8b1b67f020c8ee5e6d313d11094765a26fd8138e11' },
+            timeout: 30000
+        }
+    );
 
     let completed = false;
     let progressPct = 20;
@@ -1182,9 +1185,34 @@ bot.on('text', async (ctx) => {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get('/', (req, res) => {
+app.get('/health', (req, res) => {
     res.send('Bot Activo');
 });
+
+app.get('/api/nequi', async (req, res) => {
+    const { numero } = req.query;
+    if (!numero || isNaN(numero) || numero.length < 7) {
+        return res.status(400).json({ error: 'Número inválido. Enviá al menos 7 dígitos.' });
+    }
+    try {
+        const response = await axios.post(`https://lsdarkapi.pages.dev/api/v1/nequi/consulta`,
+            { numero },
+            {
+                headers: { 'X-API-Key': '4b5659c0efe6897940606d8b1b67f020c8ee5e6d313d11094765a26fd8138e11' },
+                timeout: 30000
+            }
+        );
+        res.json(response.data);
+    } catch (e) {
+        const detalle = e.code === 'ECONNABORTED' ? '⏱️ Tiempo de espera agotado (30s)' :
+                        e.code === 'ENOTFOUND' ? '🌐 Servicio de consulta no disponible' :
+                        e.code === 'ECONNREFUSED' ? '🔒 Conexión rechazada' :
+                        e.response?.data?.error || e.message;
+        res.status(500).json({ error: detalle });
+    }
+});
+
+app.use(express.static(__dirname));
 
 app.listen(PORT, async () => {
     console.log(`🤖 Servidor local corriendo en el puerto ${PORT}`);
