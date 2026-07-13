@@ -1154,14 +1154,22 @@ bot.on('text', async (ctx) => {
         
         let r = `👁️ <b>EL OJO DE DIOS</b>\n\n📱 <b>${numero}</b>\n\n`;
         
-        const campos = data.consulta || data;
-        for (const [k, v] of Object.entries(campos)) {
-            if (!['ok','api_online','motor_respondio','blocked','invalid_phone','session_error','notification','creador','error'].includes(k) && v != null && typeof v !== 'object') {
-                const emoji = emojis[k.toLowerCase()] || '🔹';
-                const label = k.replace(/_/g, ' ');
-                r += `${emoji} <b>${label}:</b> ${v}\n`;
-            }
+        const ignorar = ['ok','api_online','motor_respondio','blocked','invalid_phone','session_error','notification','creador','error','consulta'];
+        const procesados = new Set();
+        
+        const mostrarCampo = (k, v) => {
+            const key = k.toLowerCase();
+            if (ignorar.includes(key) || procesados.has(key) || v == null || typeof v === 'object') return;
+            procesados.add(key);
+            const emoji = emojis[key] || '🔹';
+            const label = k.replace(/_/g, ' ');
+            r += `${emoji} <i>${label}:</i> <b>${v}</b>\n`;
+        };
+        
+        if (data.consulta && typeof data.consulta === 'object') {
+            for (const [k, v] of Object.entries(data.consulta)) mostrarCampo(k, v);
         }
+        for (const [k, v] of Object.entries(data)) mostrarCampo(k, v);
         r += `\n✨ by @DarkNull1 | @El_CuervoX`;
         
         ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
