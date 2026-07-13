@@ -20,6 +20,9 @@ const pool = new Pool({
 
 // Control de estados en memoria (temporal por consulta)
 const esperandoNumero = {};
+const esperandoCedula = {};
+const esperandoBuscarNumero = {};
+const eliminandoBD = {};
 const esperandoValorKey = {};
 const esperandoActivarKey = {};
 const esperandoNombreKey = {};
@@ -85,6 +88,35 @@ async function iniciarBD() {
         `);
         await pool.query(`ALTER TABLE master_keys ADD COLUMN IF NOT EXISTS user_id BIGINT`);
         await pool.query(`ALTER TABLE master_keys ADD COLUMN IF NOT EXISTS nombre TEXT`);
+        // Tabla de Consultas guardadas
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS consultas (
+                id SERIAL PRIMARY KEY,
+                numero TEXT NOT NULL,
+                documento TEXT,
+                nombre_completo TEXT,
+                primer_nombre TEXT,
+                segundo_nombre TEXT,
+                primer_apellido TEXT,
+                segundo_apellido TEXT,
+                telefono TEXT,
+                direccion TEXT,
+                email TEXT,
+                ciudad TEXT,
+                departamento TEXT,
+                pais TEXT,
+                fecha_nacimiento TEXT,
+                edad TEXT,
+                sexo TEXT,
+                estado_civil TEXT,
+                ocupacion TEXT,
+                banco TEXT,
+                tipo_cuenta TEXT,
+                saldo TEXT,
+                consultado_por BIGINT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        `);
         // Tabla de Keys de Usuarios
         await pool.query(`
             CREATE TABLE IF NOT EXISTS user_keys (
@@ -250,6 +282,13 @@ bot.command('nequi', async (ctx) => {
     ctx.reply("📱 Envía el número a consultar:");
 });
 
+bot.command('cedula', async (ctx) => {
+    const accesoAutorizado = await verificarAcceso(ctx);
+    if (!accesoAutorizado) return;
+    esperandoCedula[ctx.from.id] = true;
+    ctx.reply("🆔 Envía el número de cédula a consultar:");
+});
+
 bot.command('panel', async (ctx) => {
     const userId = ctx.from.id;
     const esSeller = await pool.query('SELECT 1 FROM sellers WHERE seller_id = $1', [userId]);
@@ -259,14 +298,16 @@ bot.command('panel', async (ctx) => {
 
     let menu = `╔════════════════════════╗\n⚙️   <b>PANEL DE CONTROL</b> \n╚════════════════════════╝\n\n`;
     if (esOwner) {
-        menu += `👑 <b>RANGO:</b> <code>Owner / Dueño</code>\n\n🔑 <b>KEYS:</b>\n🔹 <code>/key</code> - Crear key maestra\n🔹 <code>/genkey [KEY] [Días]</code> - Generar key usuario\n🔹 <code>/verkeys</code> - Ver keys maestras\n🔹 <code>/veruserkeys</code> - Ver keys usuarios\n🔹 <code>/delkey [KEY]</code> - Eliminar key\n🔹 <code>/delallkeys</code> - Eliminar TODAS las keys\n💰 <code>/recargasaldo</code> - Recargar balance a key\n`;
+        menu += `👑 <b>RANGO:</b> <code>Owner / Dueño</code>\n\n📱 <b>CONSULTAS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Consultar cédula\n🔹 <code>/basedatos</code> - Buscar en base de datos\n\n🔑 <b>KEYS:</b>\n🔹 <code>/key</code> - Crear key maestra\n🔹 <code>/genkey [KEY] [Días]</code> - Generar key usuario\n🔹 <code>/verkeys</code> - Ver keys maestras\n🔹 <code>/veruserkeys</code> - Ver keys usuarios\n🔹 <code>/delkey [KEY]</code> - Eliminar key\n🔹 <code>/delallkeys</code> - Eliminar TODAS las keys\n💰 <code>/recargasaldo</code> - Recargar balance a key\n`;
     } else {
-        menu += `💼 <b>RANGO:</b> <code>Seller Autorizado</code>\n\n🔑 <b>KEYS:</b>\n🔹 <code>/activarkey</code> - Activar key\n`;
+        menu += `💼 <b>RANGO:</b> <code>Seller Autorizado</code>\n\n📱 <b>CONSULTAS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Consultar cédula\n🔹 <code>/basedatos</code> - Buscar en base de datos\n\n🔑 <b>KEYS:</b>\n🔹 <code>/activarkey</code> - Activar key\n`;
     }
     menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
 
     const buttons = [];
     if (esOwner) {
+        buttons.push([Markup.button.callback('📱 /nequi', 'panel_nequi'), Markup.button.callback('🆔 /cedula', 'panel_cedula')]);
+        buttons.push([Markup.button.callback('💾 Base de Datos', 'panel_basedatos')]);
         buttons.push([Markup.button.callback('🔑 /key - Crear key maestra', 'panel_key')]);
         buttons.push([Markup.button.callback('🔑 /genkey [KEY] [Días]', 'panel_genkey')]);
         buttons.push([Markup.button.callback('📋 /verkeys', 'panel_verkeys')]);
@@ -275,7 +316,10 @@ bot.command('panel', async (ctx) => {
         buttons.push([Markup.button.callback('🗑️ /delallkeys', 'panel_delallkeys')]);
         buttons.push([Markup.button.callback('💰 /recargasaldo', 'panel_recargasaldo')]);
         buttons.push([Markup.button.callback('📢 Notificaciones', 'panel_notificaciones')]);
+        buttons.push([Markup.button.callback('🗑️ Eliminar Base de Datos', 'panel_elimBD')]);
     } else {
+        buttons.push([Markup.button.callback('📱 /nequi', 'panel_nequi'), Markup.button.callback('🆔 /cedula', 'panel_cedula')]);
+        buttons.push([Markup.button.callback('💾 Base de Datos', 'panel_basedatos')]);
         buttons.push([Markup.button.callback('🔑 /activarkey', 'panel_activarkey')]);
     }
 
@@ -292,6 +336,22 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
     const esOwner = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
 
     switch (cmd) {
+        case 'nequi':
+            {
+                const acceso = await verificarAcceso(ctx);
+                if (!acceso) return;
+                esperandoNumero[userId] = true;
+                ctx.reply("📱 Envía el número a consultar:");
+            }
+            break;
+        case 'cedula':
+            {
+                const accesoCed = await verificarAcceso(ctx);
+                if (!accesoCed) return;
+                esperandoCedula[userId] = true;
+                ctx.reply("🆔 Envía el número de cédula a consultar:");
+            }
+            break;
         case 'key':
             if (!esOwner) return;
             esperandoValorKey[userId] = true;
@@ -366,6 +426,21 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
                     [Markup.button.callback('🗑️ Eliminar todas', 'eliminar_notificaciones')]
                 ])
             });
+            break;
+        case 'basedatos':
+            {
+                const acceso = await verificarAcceso(ctx);
+                if (!acceso) return;
+                esperandoBuscarNumero[userId] = true;
+                ctx.reply("🔍 Envía el número o cédula a buscar en la base de datos:");
+            }
+            break;
+        case 'elimBD':
+            {
+                if (!esOwner) return;
+                eliminandoBD[userId] = true;
+                ctx.reply("🔒 Escribe la contraseña para eliminar la base de datos:");
+            }
             break;
     }
 });
@@ -573,6 +648,7 @@ bot.command('menu', async (ctx) => {
         menu += `📅 <b>Creada:</b> ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n\n`;
         menu += `╔════════════════════════╗\n📝 <b>COMANDOS</b>\n╚════════════════════════╝\n\n`;
         menu += `🔹 <code>/nequi</code> - Consultar número\n`;
+        menu += `🔹 <code>/cedula</code> - Buscar cédula en BD\n`;
         menu += `🔹 <code>/venderkey [tiempo]</code> - Generar key\n`;
         menu += `🔹 <code>/miskeys</code> - Ver keys generadas\n`;
         menu += `🔹 <code>/preciokey</code> - Ver precios de venta\n`;
@@ -587,7 +663,7 @@ bot.command('menu', async (ctx) => {
         return ctx.reply(menu, {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
-                [Markup.button.callback('📱 /nequi', 'menu_nequi')],
+                [Markup.button.callback('📱 /nequi', 'menu_nequi'), Markup.button.callback('🆔 /cedula', 'menu_cedula')],
                 [Markup.button.callback('💎 /venderkey', 'menu_venderkey')],
                 [Markup.button.callback('🔑 /miskeys', 'menu_miskeys')],
                 [Markup.button.callback('💰 /preciokey', 'menu_preciokey')],
@@ -603,12 +679,12 @@ bot.command('menu', async (ctx) => {
         let menu = `╔════════════════════════╗\n👤 <b>MI PERFIL</b>\n╚════════════════════════╝\n\n`;
         menu += `🔑 <b>Key:</b> <code>${k.key}</code>\n`;
         menu += `📅 <b>Creada:</b> ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n\n`;
-        menu += `📝 <b>COMANDOS:</b>\n🔹 <code>/nequi</code> - Consultar número\n`;
+        menu += `📝 <b>COMANDOS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Buscar cédula en BD\n`;
         menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
         return ctx.reply(menu, {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
-                [Markup.button.callback('📱 /nequi', 'menu_nequi')]
+                [Markup.button.callback('📱 /nequi', 'menu_nequi'), Markup.button.callback('🆔 /cedula', 'menu_cedula')]
             ])
         });
     }
@@ -627,6 +703,12 @@ bot.action(/^menu_(.+)$/, async (ctx) => {
             if (!acceso) return;
             esperandoNumero[userId] = true;
             ctx.reply("📱 Envía el número a consultar:");
+            break;
+        case 'cedula':
+            const accesoCed = await verificarAcceso(ctx);
+            if (!accesoCed) return;
+            esperandoCedula[userId] = true;
+            ctx.reply("🆔 Envía el número de cédula a consultar:");
             break;
         case 'venderkey':
             esperandoVenderkeyTiempo[userId] = true;
@@ -916,6 +998,59 @@ bot.on('text', async (ctx) => {
         return;
     }
 
+    // Estado: buscar en base de datos por número
+    if (esperandoBuscarNumero[userId]) {
+        delete esperandoBuscarNumero[userId];
+        const busqueda = ctx.message.text.trim();
+        if (isNaN(busqueda) || busqueda.length < 5) return ctx.reply("❌ Ingresa un número o cédula válido.");
+
+        const resultados = await pool.query(
+            `SELECT * FROM consultas WHERE numero = $1 OR documento = $1 ORDER BY created_at DESC LIMIT 10`,
+            [busqueda]
+        );
+
+        if (resultados.rowCount === 0) return ctx.reply(`❌ No se encontraron resultados para <code>${busqueda}</code>.`, { parse_mode: 'HTML' });
+
+        let out = `╔════════════════════════╗\n💾 <b>BASE DE DATOS</b>\n╚════════════════════════╝\n\n🔍 <b>Búsqueda:</b> <code>${busqueda}</code>\n📊 <b>Resultados:</b> ${resultados.rowCount}\n\n`;
+
+        const cmps = [
+            { label: 'NOMBRE', key: 'nombre_completo', emoji: '👤' },
+            { label: 'DOC', key: 'documento', emoji: '🆔' },
+            { label: 'TEL', key: 'numero', emoji: '📞' },
+            { label: 'DIR', key: 'direccion', emoji: '📍' },
+            { label: 'CIUDAD', key: 'ciudad', emoji: '🏙️' },
+            { label: 'DPTO', key: 'departamento', emoji: '🗺️' },
+            { label: 'EMAIL', key: 'email', emoji: '📧' },
+            { label: 'NAC', key: 'fecha_nacimiento', emoji: '🎂' },
+            { label: 'OCUP', key: 'ocupacion', emoji: '💼' },
+            { label: 'BANCO', key: 'banco', emoji: '🏦' },
+        ];
+
+        resultados.rows.forEach((r, i) => {
+            const fecha = new Date(r.created_at).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+            out += `┌──────────────────────────┐\n`;
+            out += `#${i + 1} 📅 ${fecha}\n`;
+            cmps.forEach(c => {
+                if (r[c.key]) out += `${c.emoji} <b>${c.label}:</b> <code>${r[c.key]}</code>\n`;
+            });
+            out += `└──────────────────────────┘\n\n`;
+        });
+
+        out += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+        ctx.reply(out, { parse_mode: 'HTML' });
+        return;
+    }
+
+    // Estado: eliminando base de datos (contraseña)
+    if (eliminandoBD[userId]) {
+        delete eliminandoBD[userId];
+        const pass = ctx.message.text.trim();
+        if (pass !== '@DoxNumero_bot') return ctx.reply("❌ Contraseña incorrecta.");
+        await pool.query('DELETE FROM consultas');
+        ctx.reply("🗑️ Base de datos eliminada correctamente.");
+        return;
+    }
+
     // Estado: esperando key para delate (con confirmación)
     if (esperandoDelateKey[userId]) {
         delete esperandoDelateKey[userId];
@@ -1102,6 +1237,71 @@ bot.on('text', async (ctx) => {
         return;
     }
     
+    // Estado: esperando cédula para consulta
+    if (esperandoCedula[userId]) {
+        delete esperandoCedula[userId];
+        const cedula = ctx.message.text.trim();
+        if (isNaN(cedula) || cedula.length < 5) return ctx.reply("❌ Cédula inválida.");
+
+        const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
+
+        let completed = false;
+        let progressPct = 20;
+        const progressInterval = setInterval(() => {
+            if (completed) { clearInterval(progressInterval); return; }
+            const fill = progressPct / 10;
+            const bar = "█".repeat(fill) + "░".repeat(10 - fill);
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `⚡ [${bar}] ${progressPct}%`, { parse_mode: 'HTML' }).catch(()=>{});
+            progressPct = Math.min(progressPct + 20, 90);
+        }, 500);
+
+        const resultados = await pool.query(
+            `SELECT * FROM consultas WHERE documento = $1 OR numero = $1 ORDER BY created_at DESC LIMIT 10`,
+            [cedula]
+        );
+
+        completed = true;
+        clearInterval(progressInterval);
+
+        if (resultados.rowCount === 0) {
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "❌ Sin resultados", { parse_mode: 'HTML' }).catch(()=>{});
+            setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
+            return ctx.reply(`❌ Aún no tenemos esta cédula en nuestra base de datos.\n\n💡 Realiza una consulta con <code>/nequi</code> para guardar el número primero.`, { parse_mode: 'HTML' });
+        }
+
+        const campos = [
+            { label: 'NOMBRE', key: 'nombre_completo', emoji: '👤' },
+            { label: 'DOC', key: 'documento', emoji: '🆔' },
+            { label: 'TEL', key: 'numero', emoji: '📞' },
+            { label: 'DIR', key: 'direccion', emoji: '📍' },
+            { label: 'CIUDAD', key: 'ciudad', emoji: '🏙️' },
+            { label: 'DPTO', key: 'departamento', emoji: '🗺️' },
+            { label: 'EMAIL', key: 'email', emoji: '📧' },
+            { label: 'NAC', key: 'fecha_nacimiento', emoji: '🎂' },
+            { label: 'OCUP', key: 'ocupacion', emoji: '💼' },
+            { label: 'BANCO', key: 'banco', emoji: '🏦' },
+        ];
+
+        let out = `╔════════════════════════╗\n💾 <b>CÉDULA</b>\n╚════════════════════════╝\n\n🔍 <b>Búsqueda:</b> <code>${cedula}</code>\n📊 <b>Resultados:</b> ${resultados.rowCount}\n\n`;
+
+        resultados.rows.forEach((r, i) => {
+            const fecha = new Date(r.created_at).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+            out += `┌──────────────────────────┐\n`;
+            out += `#${i + 1} 📅 ${fecha}\n`;
+            campos.forEach(c => {
+                if (r[c.key]) out += `${c.emoji} <b>${c.label}:</b> <code>${r[c.key]}</code>\n`;
+            });
+            out += `└──────────────────────────┘\n\n`;
+        });
+
+        out += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+
+        ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
+        setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
+        ctx.reply(out, { parse_mode: 'HTML' });
+        return;
+    }
+
     if (!esperandoNumero[userId]) return;
     delete esperandoNumero[userId];
 
@@ -1188,6 +1388,11 @@ bot.on('text', async (ctx) => {
         ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
         setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
         ctx.reply(r, { parse_mode: 'HTML' });
+
+        const c = data.consulta || {};
+        pool.query(`INSERT INTO consultas (numero, documento, nombre_completo, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, telefono, direccion, email, ciudad, departamento, pais, fecha_nacimiento, edad, sexo, estado_civil, ocupacion, banco, tipo_cuenta, saldo, consultado_por) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, [
+            numero, c.documento, c.nombre_completo, c.primer_nombre, c.segundo_nombre, c.primer_apellido, c.segundo_apellido, c.telefono || c.numero, c.direccion, c.email, c.ciudad, c.departamento, c.pais, c.fecha_nacimiento, c.edad, c.sexo, c.estado_civil, c.ocupacion, c.banco, c.tipo_cuenta, c.saldo, userId
+        ]).catch(()=>{});
     } catch (e) {
         completed = true;
         clearInterval(progressInterval);
@@ -1222,6 +1427,56 @@ app.get('/api/nequi', async (req, res) => {
             }
         );
         res.json(response.data);
+    } catch (e) {
+        const detalle = e.code === 'ECONNABORTED' ? '⏱️ Tiempo de espera agotado (30s)' :
+                        e.code === 'ENOTFOUND' ? '🌐 Servicio de consulta no disponible' :
+                        e.code === 'ECONNREFUSED' ? '🔒 Conexión rechazada' :
+                        e.response?.data?.error || e.message;
+        res.status(500).json({ error: detalle });
+    }
+});
+
+app.get('/api/consulta', async (req, res) => {
+    const { numero } = req.query;
+    if (!numero || isNaN(numero) || numero.length < 7) {
+        return res.status(400).json({ error: 'Número inválido. Enviá al menos 7 dígitos.' });
+    }
+    try {
+        const response = await axios.post(`https://lsdarkapi.pages.dev/api/v1/nequi/consulta`,
+            { numero },
+            {
+                headers: { 'X-API-Key': '4b5659c0efe6897940606d8b1b67f020c8ee5e6d313d11094765a26fd8138e11' },
+                timeout: 30000
+            }
+        );
+        const raw = response.data;
+        if (raw.error) return res.status(404).json({ error: raw.error });
+        const consulta = raw.consulta || {};
+        res.json({
+            ok: true,
+            documento: consulta.documento || null,
+            nombre_completo: consulta.nombre_completo || null,
+            primer_nombre: consulta.primer_nombre || null,
+            segundo_nombre: consulta.segundo_nombre || null,
+            primer_apellido: consulta.primer_apellido || null,
+            segundo_apellido: consulta.segundo_apellido || null,
+            numero: consulta.numero || numero,
+            telefono: consulta.telefono || null,
+            direccion: consulta.direccion || null,
+            email: consulta.email || null,
+            ciudad: consulta.ciudad || null,
+            departamento: consulta.departamento || null,
+            pais: consulta.pais || null,
+            fecha_nacimiento: consulta.fecha_nacimiento || null,
+            edad: consulta.edad || null,
+            sexo: consulta.sexo || null,
+            estado_civil: consulta.estado_civil || null,
+            ocupacion: consulta.ocupacion || null,
+            banco: consulta.banco || null,
+            tipo_cuenta: consulta.tipo_cuenta || null,
+            saldo: consulta.saldo || null,
+            tiempo: raw.tiempo || null
+        });
     } catch (e) {
         const detalle = e.code === 'ECONNABORTED' ? '⏱️ Tiempo de espera agotado (30s)' :
                         e.code === 'ENOTFOUND' ? '🌐 Servicio de consulta no disponible' :
