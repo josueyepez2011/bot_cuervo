@@ -1,4 +1,4 @@
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const { Pool } = require('pg');
 const express = require('express');
@@ -25,6 +25,12 @@ const esperandoValorKey = {};
 const esperandoActivarKey = {};
 const esperandoNombreKey = {};
 const esperandoRecargarMonto = {};
+const esperandoTiempoKey = {};
+const confirmandoEliminarKey = {};
+const esperandoGenkeyDias = {};
+const esperandoDelkeyKey = {};
+const esperandoVenderkeyTiempo = {};
+const esperandoDelateKey = {};
 const keyActiva = {};
 
 function generarKey(tipo) {
@@ -106,29 +112,33 @@ async function verificarAcceso(ctx) {
     if (userId === OWNER_IDS[0] || userId === OWNER_IDS[1]) return true;
 
     try {
-        const esSeller = await pool.query('SELECT 1 FROM sellers WHERE seller_id = $1', [userId]);
-        if (esSeller.rowCount > 0) return true;
+        const result = await pool.query(`
+            SELECT 
+                (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller,
+                (SELECT acceso FROM vips WHERE cliente_id = $1) as vip_acceso,
+                (SELECT vencimiento FROM user_keys WHERE user_id = $1) as user_key_vencimiento,
+                (SELECT 1 FROM master_keys WHERE user_id = $1) as es_master
+        `, [userId]);
 
-        const vipRes = await pool.query('SELECT acceso FROM vips WHERE cliente_id = $1', [userId]);
-        if (vipRes.rowCount > 0) {
-            const acceso = vipRes.rows[0].acceso;
-            if (acceso === 'perm') return true;
-            if (new Date(acceso) > new Date()) return true;
+        const row = result.rows[0];
+
+        if (row.es_seller) return true;
+
+        if (row.vip_acceso) {
+            if (row.vip_acceso === 'perm') return true;
+            if (new Date(row.vip_acceso) > new Date()) return true;
         }
 
-        const keyRes = await pool.query('SELECT vencimiento FROM user_keys WHERE user_id = $1', [userId]);
-        if (keyRes.rowCount > 0) {
-            const key = keyRes.rows[0];
-            if (key.vencimiento && new Date(key.vencimiento) < new Date()) {
+        if (row.user_key_vencimiento) {
+            if (new Date(row.user_key_vencimiento) < new Date()) {
                 await pool.query('UPDATE user_keys SET user_id = NULL WHERE user_id = $1', [userId]);
                 ctx.reply("❌ Tu key ha expirado. Compra una nueva con @DarkNull1 | @El_CuervoX");
                 return false;
             }
-            if (!key.vencimiento || new Date(key.vencimiento) > new Date()) return true;
+            return true;
         }
 
-        const masterRes = await pool.query('SELECT 1 FROM master_keys WHERE user_id = $1', [userId]);
-        if (masterRes.rowCount > 0) return true;
+        if (row.es_master) return true;
 
         ctx.reply("❌ No tienes acceso, compra tu acceso con @DarkNull1 | @El_CuervoX");
         return false;
@@ -145,25 +155,49 @@ async function enviarStart(ctx) {
     const nombreCompleto = `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
     
     let tipoMembresia = "❌ Sin acceso activo";
+    let tieneAcceso = false;
 
     if (userId === OWNER_IDS[0] || userId === OWNER_IDS[1]) {
         tipoMembresia = "👑 Owner / Creador";
+        tieneAcceso = true;
     } else {
         try {
             const esSeller = await pool.query('SELECT 1 FROM sellers WHERE seller_id = $1', [userId]);
             if (esSeller.rowCount > 0) {
                 tipoMembresia = "💼 Seller / Vendedor Autorizado";
+                tieneAcceso = true;
             } else {
                 const vipRes = await pool.query('SELECT acceso FROM vips WHERE cliente_id = $1', [userId]);
                 if (vipRes.rowCount > 0) {
                     const acceso = vipRes.rows[0].acceso;
                     if (acceso === 'perm') {
                         tipoMembresia = "💎 VIP Permanente";
+                        tieneAcceso = true;
                     } else if (new Date(acceso) > new Date()) {
                         const fechaFormat = fechaColombiaISO();
                         tipoMembresia = `⏱️ VIP Activo (Vence: ${fechaFormat})`;
+                        tieneAcceso = true;
                     } else {
                         tipoMembresia = "❌ Membresía Expirada";
+                    }
+                }
+
+                if (!tieneAcceso) {
+                    const userKeyRes = await pool.query('SELECT vencimiento FROM user_keys WHERE user_id = $1', [userId]);
+                    if (userKeyRes.rowCount > 0) {
+                        const vencimiento = userKeyRes.rows[0].vencimiento;
+                        if (!vencimiento || new Date(vencimiento) > new Date()) {
+                            tipoMembresia = vencimiento ? `🔑 Key Activa (Vence: ${vencimiento})` : "🔑 Key Activa";
+                            tieneAcceso = true;
+                        }
+                    }
+                }
+
+                if (!tieneAcceso) {
+                    const masterRes = await pool.query('SELECT nombre FROM master_keys WHERE user_id = $1', [userId]);
+                    if (masterRes.rowCount > 0) {
+                        tipoMembresia = "🔑 Key Maestra";
+                        tieneAcceso = true;
                     }
                 }
             }
@@ -173,7 +207,7 @@ async function enviarStart(ctx) {
     }
 
     let bienvenidaPanel = `👁️ <b>¡Bienvenido al Ojo de Dios!</b> \n`;
-    bienvenidaPanel += `Para realizar una consulta presiona el comando /nequi\n\n`;
+    bienvenidaPanel += `Para realizar una consulta presiona el comando /menu\n\n`;
     bienvenidaPanel += `╔════════════════════════╗\n`;
     bienvenidaPanel += `   👤   <b>MI PERFIL DE ACCESO</b> \n`;
     bienvenidaPanel += `╚════════════════════════╝\n\n`;
@@ -184,10 +218,31 @@ async function enviarStart(ctx) {
     bienvenidaPanel += `─────────────────────────\n`;
     bienvenidaPanel += `✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
 
-    ctx.reply(bienvenidaPanel, { parse_mode: 'HTML' });
+    if (tieneAcceso) {
+        ctx.reply(bienvenidaPanel, { parse_mode: 'HTML' });
+    } else {
+        ctx.reply(bienvenidaPanel, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🔑 Activar Key', 'activar_key')],
+                [Markup.button.callback('❌ Ignorar', 'ignorar')]
+            ])
+        });
+    }
 }
 
 bot.start((ctx) => { enviarStart(ctx); });
+
+bot.action('activar_key', async (ctx) => {
+    await ctx.answerCbQuery();
+    esperandoActivarKey[ctx.from.id] = true;
+    await ctx.editMessageText("🔑 Por favor, ingresa tu key:", { parse_mode: 'HTML' });
+});
+
+bot.action('ignorar', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+});
 
 bot.command('nequi', async (ctx) => {
     const accesoAutorizado = await verificarAcceso(ctx);
@@ -205,12 +260,97 @@ bot.command('panel', async (ctx) => {
 
     let menu = `╔════════════════════════╗\n⚙️   <b>PANEL DE CONTROL</b> \n╚════════════════════════╝\n\n`;
     if (esOwner) {
-        menu += `👑 <b>RANGO:</b> <code>Owner / Dueño</code>\n\n📝 <b>COMANDOS:</b>\n🔹 <code>/vender [ID] [Dias/perm]</code>\n🔹 <code>/lista</code>\n🔹 <code>/addseller [ID]</code>\n🔹 <code>/delseller [ID]</code>\n\n🔑 <b>KEYS:</b>\n🔹 <code>/key</code> - Crear key maestra\n🔹 <code>/genkey [KEY] [Días]</code> - Generar key usuario\n🔹 <code>/verkeys</code> - Ver keys maestras\n🔹 <code>/veruserkeys</code> - Ver keys usuarios\n🔹 <code>/delkey [KEY]</code> - Eliminar key\n🔹 <code>/delallkeys</code> - Eliminar TODAS las keys\n💰 <code>/recargasaldo</code> - Recargar balance a key\n`;
+        menu += `👑 <b>RANGO:</b> <code>Owner / Dueño</code>\n\n🔑 <b>KEYS:</b>\n🔹 <code>/key</code> - Crear key maestra\n🔹 <code>/genkey [KEY] [Días]</code> - Generar key usuario\n🔹 <code>/verkeys</code> - Ver keys maestras\n🔹 <code>/veruserkeys</code> - Ver keys usuarios\n🔹 <code>/delkey [KEY]</code> - Eliminar key\n🔹 <code>/delallkeys</code> - Eliminar TODAS las keys\n💰 <code>/recargasaldo</code> - Recargar balance a key\n`;
     } else {
-        menu += `💼 <b>RANGO:</b> <code>Seller Autorizado</code>\n\n📝 <b>COMANDOS:</b>\n🔹 <code>/vender [ID] [Dias/perm]</code>\n🔹 <code>/lista</code>\n🔹 <code>/activarkey</code> - Activar key\n`;
+        menu += `💼 <b>RANGO:</b> <code>Seller Autorizado</code>\n\n🔑 <b>KEYS:</b>\n🔹 <code>/activarkey</code> - Activar key\n`;
     }
     menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
-    ctx.reply(menu, { parse_mode: 'HTML' });
+
+    const buttons = [];
+    if (esOwner) {
+        buttons.push([Markup.button.callback('🔑 /key - Crear key maestra', 'panel_key')]);
+        buttons.push([Markup.button.callback('🔑 /genkey [KEY] [Días]', 'panel_genkey')]);
+        buttons.push([Markup.button.callback('📋 /verkeys', 'panel_verkeys')]);
+        buttons.push([Markup.button.callback('👥 /veruserkeys', 'panel_veruserkeys')]);
+        buttons.push([Markup.button.callback('❌ /delkey [KEY]', 'panel_delkey')]);
+        buttons.push([Markup.button.callback('🗑️ /delallkeys', 'panel_delallkeys')]);
+        buttons.push([Markup.button.callback('💰 /recargasaldo', 'panel_recargasaldo')]);
+    } else {
+        buttons.push([Markup.button.callback('🔑 /activarkey', 'panel_activarkey')]);
+    }
+
+    ctx.reply(menu, {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard(buttons)
+    });
+});
+
+bot.action(/^panel_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const cmd = ctx.match[1];
+    const userId = ctx.from.id;
+    const esOwner = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
+
+    switch (cmd) {
+        case 'key':
+            if (!esOwner) return;
+            esperandoValorKey[userId] = true;
+            ctx.reply("💰 Ingresa el valor de la cuenta (ejemplo: 100000):");
+            break;
+        case 'genkey':
+            if (!esOwner) return;
+            esperandoGenkeyDias[userId] = true;
+            ctx.reply("⏱️ Por favor selecciona los días:\n\n• 1 Dia\n• 7 Dias\n• 30Dias\n• perm (permanente)\n\nResponde con el número o 'perm':");
+            break;
+        case 'verkeys':
+            if (!esOwner) return;
+            const vk = await pool.query('SELECT * FROM master_keys WHERE owner_id = $1', [userId]);
+            if (vk.rowCount === 0) return ctx.reply("❌ No tienes keys creadas.");
+            let outVk = `╔════════════════════════╗\n🔑 <b>KEYS MAESTRAS</b>\n╚════════════════════════╝\n\n`;
+            vk.rows.forEach(k => {
+                outVk += `├ <code>${k.key}</code>\n`;
+                outVk += `│ 💰 Balance: $${k.balance.toLocaleString()}\n`;
+                outVk += `│ 📅 ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n\n`;
+            });
+            outVk += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            ctx.reply(outVk, { parse_mode: 'HTML' });
+            break;
+        case 'veruserkeys':
+            if (!esOwner) return;
+            const vuk = await pool.query('SELECT * FROM user_keys WHERE owner_key IN (SELECT key FROM master_keys WHERE owner_id = $1)', [userId]);
+            if (vuk.rowCount === 0) return ctx.reply("❌ No hay keys de usuarios.");
+            let outVuk = `╔════════════════════════╗\n👥 <b>KEYS DE USUARIOS</b>\n╚════════════════════════╝\n\n`;
+            vuk.rows.forEach(k => {
+                const estado = k.activa ? '✅' : '❌';
+                const vence = k.vencimiento || 'Sin fecha';
+                outVuk += `${estado} <code>${k.key}</code>\n`;
+                outVuk += `│ 👤 ${k.nombre || 'Sin nombre'}\n`;
+                outVuk += `│ 📅 Vence: ${vence}\n\n`;
+            });
+            outVuk += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            ctx.reply(outVuk, { parse_mode: 'HTML' });
+            break;
+        case 'delkey':
+            if (!esOwner) return;
+            esperandoDelkeyKey[userId] = true;
+            ctx.reply("❓ Ingresa la key que deseas eliminar:");
+            break;
+        case 'delallkeys':
+            if (!esOwner) return;
+            await pool.query('DELETE FROM user_keys');
+            await pool.query('DELETE FROM master_keys');
+            ctx.reply("🗑️ Todas las keys han sido eliminadas.");
+            break;
+        case 'recargasaldo':
+            if (!esOwner) return;
+            esperandoRecargarMonto[userId] = true;
+            ctx.reply("💰 Ingresa la key maestra a recargar:");
+            break;
+        case 'activarkey':
+            esperandoActivarKey[userId] = true;
+            ctx.reply("🔑 Pega tu key:");
+            break;
+    }
 });
 
 bot.command('lista', async (ctx) => {
@@ -419,14 +559,25 @@ bot.command('menu', async (ctx) => {
         menu += `🔹 <code>/venderkey [tiempo]</code> - Generar key\n`;
         menu += `🔹 <code>/miskeys</code> - Ver keys generadas\n`;
         menu += `🔹 <code>/preciokey</code> - Ver precios de venta\n`;
-        menu += `🔹 <code>/recargar</code> - Recargar balance\n\n`;
+        menu += `🔹 <code>/recargar</code> - Recargar balance\n`;
+        menu += `🔹 <code>/delate [KEY]</code> - Eliminar key\n\n`;
         menu += `💰 <b>Precios:</b>\n`;
-        menu += `• 1 día → $7.000\n`;
-        menu += `• 7 días → $15.000\n`;
-        menu += `• 30 días → $55.000\n`;
-        menu += `• Permanente → $150.000\n\n`;
+        menu += `• 1 día → $10.000\n`;
+        menu += `• 7 días → $20.000\n`;
+        menu += `• 30 días → $70.000\n`;
+        menu += `• Permanente → $200.000\n\n`;
         menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
-        return ctx.reply(menu, { parse_mode: 'HTML' });
+        return ctx.reply(menu, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('📱 /nequi', 'menu_nequi')],
+                [Markup.button.callback('💎 /venderkey', 'menu_venderkey')],
+                [Markup.button.callback('🔑 /miskeys', 'menu_miskeys')],
+                [Markup.button.callback('💰 /preciokey', 'menu_preciokey')],
+                [Markup.button.callback('🔄 /recargar', 'menu_recargar')],
+                [Markup.button.callback('🗑️ /delate', 'menu_delate')]
+            ])
+        });
     }
     
     const userKey = await pool.query('SELECT * FROM user_keys WHERE user_id = $1', [userId]);
@@ -437,10 +588,86 @@ bot.command('menu', async (ctx) => {
         menu += `📅 <b>Creada:</b> ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n\n`;
         menu += `📝 <b>COMANDOS:</b>\n🔹 <code>/nequi</code> - Consultar número\n`;
         menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
-        return ctx.reply(menu, { parse_mode: 'HTML' });
+        return ctx.reply(menu, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('📱 /nequi', 'menu_nequi')]
+            ])
+        });
     }
     
     enviarStart(ctx);
+});
+
+bot.action(/^menu_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const cmd = ctx.match[1];
+    const userId = ctx.from.id;
+
+    switch (cmd) {
+        case 'nequi':
+            const acceso = await verificarAcceso(ctx);
+            if (!acceso) return;
+            esperandoNumero[userId] = true;
+            ctx.reply("📱 Envía el número a consultar:");
+            break;
+        case 'venderkey':
+            esperandoVenderkeyTiempo[userId] = true;
+            ctx.reply("⏱️ ¿Para cuántos días quieres generar la key?\n\nOpciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)\n\n⚠️ Este valor se descuenta de tu balance.\n\nResponde con el número o 'perm':");
+            break;
+        case 'miskeys':
+            const mm = await pool.query('SELECT key FROM master_keys WHERE user_id = $1', [userId]);
+            if (mm.rowCount === 0) return ctx.reply("❌ No tienes key maestra activa.");
+            const mk = await pool.query('SELECT * FROM user_keys WHERE owner_key = $1', [mm.rows[0].key]);
+            if (mk.rowCount === 0) return ctx.reply("❌ No has generado keys aún.");
+            let outMk = `╔════════════════════════╗\n👥 <b>MIS KEYS GENERADAS</b>\n╚════════════════════════╝\n\n`;
+            const now = new Date();
+            let hayExp = false;
+            mk.rows.forEach(k => {
+                const expirada = k.vencimiento && new Date(k.vencimiento) < now;
+                const estado = expirada ? '❌ Expirada' : (k.user_id ? '✅ Usada' : '⏳ Disponible');
+                if (expirada) hayExp = true;
+                outMk += `├ <code>${k.key}</code>\n│ ${estado}\n│ 📅 Vence: ${k.vencimiento || 'Permanente'}\n\n`;
+            });
+            outMk += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            if (hayExp) {
+                ctx.reply(outMk, {
+                    parse_mode: 'HTML',
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.callback('🗑️ Eliminar keys expiradas', 'eliminar_keys_expiradas')],
+                        [Markup.button.callback('🆕 Generar nueva key', 'generar_nueva_key')]
+                    ])
+                });
+            } else {
+                ctx.reply(outMk, { parse_mode: 'HTML' });
+            }
+            break;
+        case 'preciokey':
+            const mp = await pool.query('SELECT * FROM master_keys WHERE user_id = $1', [userId]);
+            if (mp.rowCount === 0) return ctx.reply("❌ No tienes una key maestra activa.");
+            let preMenu = `╔════════════════════════╗\n💰 <b>TUS PRECIOS DE VENTA</b>\n╚════════════════════════╝\n\n`;
+            preMenu += `⏱️ <b>Opciones de key:</b>\n\n`;
+            preMenu += `🔹 1 día → <b>$10.000</b>\n🔹 7 días → <b>$20.000</b>\n🔹 30 días → <b>$70.000</b>\n🔹 Permanente → <b>$200.000</b>\n\n`;
+            preMenu += `💰 <b>Tu Balance:</b> $${mp.rows[0].balance.toLocaleString()} COP\n`;
+            preMenu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            ctx.reply(preMenu, { parse_mode: 'HTML' });
+            break;
+        case 'recargar':
+            const mr = await pool.query('SELECT * FROM master_keys WHERE user_id = $1', [userId]);
+            if (mr.rowCount === 0) return ctx.reply("❌ No tienes una key maestra activa.");
+            let recMenu = `╔════════════════════════╗\n💰 <b>SOLICITAR RECARGA</b>\n╚════════════════════════╝\n\n`;
+            recMenu += `🔑 <b>Tu Key:</b> <code>${mr.rows[0].key}</code>\n`;
+            recMenu += `💰 <b>Balance actual:</b> $${mr.rows[0].balance.toLocaleString()} COP\n\n`;
+            recMenu += `📞 <b>Para recargar contacta a:</b>\n🔹 @DarkNull1\n🔹 @El_CuervoX\n\n`;
+            recMenu += `Menciona tu key y el monto a recargar.\n\n`;
+            recMenu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            ctx.reply(recMenu, { parse_mode: 'HTML' });
+            break;
+        case 'delate':
+            esperandoDelateKey[userId] = true;
+            ctx.reply("❓ Ingresa la key que deseas eliminar:");
+            break;
+    }
 });
 
 bot.command('venderkey', async (ctx) => {
@@ -452,19 +679,20 @@ bot.command('venderkey', async (ctx) => {
     const args = ctx.message.text.split(' ');
     const tiempo = args[1];
     
-    if (!tiempo) return ctx.reply("❌ Uso: /venderkey [tiempo]\n\n⏱️ Opciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)");
+    if (!tiempo) return ctx.reply("❌ Uso: /venderkey [tiempo]\n\n⏱️ Opciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)\n\n⚠️ Este valor se descuenta de tu balance.");
     
-    let costo, dias, vence;
+    let costo, precioVenta, dias, vence;
     if (tiempo.toLowerCase() === 'perm') {
         costo = 150000;
+        precioVenta = 200000;
         dias = 36500;
         vence = null;
     } else {
         dias = parseInt(tiempo);
-        if (dias === 1) costo = 7000;
-        else if (dias === 7) costo = 15000;
-        else if (dias === 30) costo = 55000;
-        else return ctx.reply("❌ Tiempo no válido.\n\n⏱️ Opciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)");
+        if (dias === 1) { costo = 7000; precioVenta = 10000; }
+        else if (dias === 7) { costo = 15000; precioVenta = 20000; }
+        else if (dias === 30) { costo = 55000; precioVenta = 70000; }
+        else return ctx.reply("❌ Tiempo no válido.\n\n⏱️ Opciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)\n\n⚠️ Este valor se descuenta de tu balance.");
         
         vence = fechaVencimiento(dias);
     }
@@ -477,7 +705,7 @@ bot.command('venderkey', async (ctx) => {
     
     const nuevoBalance = master.rows[0].balance - costo;
     const venceMsg = vence || 'Permanente';
-    ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo: $${costo.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+    ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo: $${costo.toLocaleString()}\n💰 Costo de venta: $${precioVenta.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
 });
 
 bot.command('preciokey', async (ctx) => {
@@ -490,7 +718,7 @@ bot.command('preciokey', async (ctx) => {
     menu += `⏱️ <b>Opciones de key:</b>\n\n`;
     menu += `🔹 1 día → <b>$10.000</b>\n`;
     menu += `🔹 7 días → <b>$20.000</b>\n`;
-    menu += `🔹 30 días → <b>$60.000</b>\n`;
+    menu += `🔹 30 días → <b>$70.000</b>\n`;
     menu += `🔹 Permanente → <b>$200.000</b>\n\n`;
     menu += `📝 <b>Uso:</b>\n<code>/venderkey 1</code>\n<code>/venderkey 7</code>\n<code>/venderkey 30</code>\n<code>/venderkey perm</code>\n\n`;
     menu += `⚠️ <b>IMPORTANTE:</b>\nSi no usas tu saldo se va a perder.\nVende las keys antes de que se venzan.\n\n`;
@@ -509,14 +737,87 @@ bot.command('miskeys', async (ctx) => {
     if (keys.rowCount === 0) return ctx.reply("❌ No has generado keys aún.");
     
     let output = `╔════════════════════════╗\n👥 <b>MIS KEYS GENERADAS</b>\n╚════════════════════════╝\n\n`;
+    const now = new Date();
+    let hayExpiradas = false;
     keys.rows.forEach(k => {
-        const estado = k.user_id ? '✅ Usada' : '⏳ Disponible';
+        const expirada = k.vencimiento && new Date(k.vencimiento) < now;
+        const estado = expirada ? '❌ Expirada' : (k.user_id ? '✅ Usada' : '⏳ Disponible');
+        if (expirada) hayExpiradas = true;
         output += `├ <code>${k.key}</code>\n`;
         output += `│ ${estado}\n`;
         output += `│ 📅 Vence: ${k.vencimiento || 'Sin fecha'}\n\n`;
     });
     output += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
-    ctx.reply(output, { parse_mode: 'HTML' });
+    
+    if (hayExpiradas) {
+        ctx.reply(output, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🗑️ Eliminar keys expiradas', 'eliminar_keys_expiradas')],
+                [Markup.button.callback('🆕 Generar nueva key', 'generar_nueva_key')]
+            ])
+        });
+    } else {
+        ctx.reply(output, { parse_mode: 'HTML' });
+    }
+});
+
+bot.action('eliminar_keys_expiradas', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    const master = await pool.query('SELECT key FROM master_keys WHERE user_id = $1', [userId]);
+    if (master.rowCount === 0) return ctx.editMessageText("❌ No tienes key maestra activa.");
+    const result = await pool.query("DELETE FROM user_keys WHERE owner_key = $1 AND vencimiento IS NOT NULL AND vencimiento <= $2", [master.rows[0].key, fechaColombiaISO()]);
+    if (result.rowCount > 0) {
+        ctx.editMessageText(`🗑️ Se eliminaron ${result.rowCount} key(s) expirada(s).`);
+    } else {
+        ctx.editMessageText("❌ No hay keys expiradas para eliminar.");
+    }
+});
+
+bot.action('generar_nueva_key', async (ctx) => {
+    await ctx.answerCbQuery();
+    esperandoTiempoKey[ctx.from.id] = true;
+    ctx.editMessageText("⏱️ ¿Para cuántos días quieres generar la key?\n\nOpciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)\n\n⚠️ Este valor se descuenta de tu balance.\n\nResponde con el número o 'perm':");
+});
+
+bot.command('delate', async (ctx) => {
+    const userId = ctx.from.id;
+    const master = await pool.query('SELECT key FROM master_keys WHERE user_id = $1', [userId]);
+    if (master.rowCount === 0) return ctx.reply("❌ No tienes key maestra activa.");
+    
+    const args = ctx.message.text.split(' ');
+    const keyEliminar = args[1];
+    if (!keyEliminar) return ctx.reply("❌ Uso: /delate [KEY]");
+    
+    const keyData = await pool.query('SELECT * FROM user_keys WHERE key = $1 AND owner_key = $2', [keyEliminar, master.rows[0].key]);
+    if (keyData.rowCount === 0) return ctx.reply("❌ Esa key no existe o no te pertenece.");
+    
+    confirmandoEliminarKey[userId] = keyEliminar;
+    ctx.reply(`⚠️ ¿Estás seguro de eliminar esta key?\n\n<code>${keyEliminar}</code>`, {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Sí, eliminar', 'confirmar_si_eliminar')],
+            [Markup.button.callback('❌ Cancelar', 'confirmar_no_eliminar')]
+        ])
+    });
+});
+
+bot.action('confirmar_si_eliminar', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    const keyEliminar = confirmandoEliminarKey[userId];
+    if (!keyEliminar) return ctx.editMessageText("❌ No hay ninguna key pendiente de eliminar.");
+    
+    delete confirmandoEliminarKey[userId];
+    await pool.query('DELETE FROM user_keys WHERE key = $1', [keyEliminar]);
+    ctx.editMessageText(`🗑️ Key <code>${keyEliminar}</code> eliminada.`, { parse_mode: 'HTML' });
+});
+
+bot.action('confirmar_no_eliminar', async (ctx) => {
+    await ctx.answerCbQuery();
+    delete confirmandoEliminarKey[ctx.from.id];
+    ctx.deleteMessage();
 });
 
 bot.command('recargar', async (ctx) => {
@@ -547,19 +848,101 @@ bot.command('recargasaldo', async (ctx) => {
 bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
     
-    // Estado: esperando nombre para key maestra
+    // Estado: esperando días para genkey
+    if (esperandoGenkeyDias[userId]) {
+        delete esperandoGenkeyDias[userId];
+        const tiempo = ctx.message.text.trim().toLowerCase();
+        let dias, vence;
+        if (tiempo === 'perm') {
+            dias = 36500;
+            vence = null;
+        } else {
+            dias = parseInt(tiempo);
+            if (![1, 7, 30].includes(dias)) return ctx.reply("❌ Tiempo no válido.\n\nOpciones: 1, 7, 30, perm");
+            vence = fechaVencimiento(dias);
+        }
+        const newKey = generarKey('user');
+        await pool.query('INSERT INTO user_keys (key, vencimiento) VALUES ($1, $2)', [newKey, vence]);
+        const venceMsg = vence || 'Permanente';
+        ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    // Estado: esperando key para eliminar
+    if (esperandoDelkeyKey[userId]) {
+        delete esperandoDelkeyKey[userId];
+        const keyEliminar = ctx.message.text.trim();
+        await pool.query('DELETE FROM user_keys WHERE key = $1', [keyEliminar]);
+        await pool.query('DELETE FROM master_keys WHERE key = $1', [keyEliminar]);
+        ctx.reply(`🗑️ Key <code>${keyEliminar}</code> eliminada.`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    // Estado: esperando key para delate (con confirmación)
+    if (esperandoDelateKey[userId]) {
+        delete esperandoDelateKey[userId];
+        const keyEliminar = ctx.message.text.trim();
+        confirmandoEliminarKey[userId] = keyEliminar;
+        ctx.reply(`⚠️ ¿Estás seguro de eliminar esta key?\n\n<code>${keyEliminar}</code>`, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Sí, eliminar', 'confirmar_si_eliminar')],
+                [Markup.button.callback('❌ Cancelar', 'confirmar_no_eliminar')]
+            ])
+        });
+        return;
+    }
+
+    // Estado: esperando tiempo para venderkey
+    if (esperandoVenderkeyTiempo[userId]) {
+        delete esperandoVenderkeyTiempo[userId];
+        const master = await pool.query('SELECT * FROM master_keys WHERE user_id = $1', [userId]);
+        if (master.rowCount === 0) return ctx.reply("❌ No tienes una key maestra activa.");
+        const tiempo = ctx.message.text.trim().toLowerCase();
+        let costo, precioVenta, dias, vence;
+        if (tiempo === 'perm') {
+            costo = 150000;
+            precioVenta = 200000;
+            dias = 36500;
+            vence = null;
+        } else {
+            dias = parseInt(tiempo);
+            if (dias === 1) { costo = 7000; precioVenta = 10000; }
+            else if (dias === 7) { costo = 15000; precioVenta = 20000; }
+            else if (dias === 30) { costo = 55000; precioVenta = 70000; }
+            else return ctx.reply("❌ Tiempo no válido.\n\n⏱️ Opciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)\n\n⚠️ Este valor se descuenta de tu balance.");
+            vence = fechaVencimiento(dias);
+        }
+        if (master.rows[0].balance < costo) return ctx.reply(`❌ Balance insuficiente.\n💰 Necesitas: $${costo.toLocaleString()}\n💰 Tienes: $${master.rows[0].balance.toLocaleString()}`);
+        const newKey = generarKey('user');
+        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, master.rows[0].key]);
+        await pool.query('UPDATE master_keys SET balance = balance - $1 WHERE user_id = $2', [costo, userId]);
+        const nuevoBalance = master.rows[0].balance - costo;
+        const venceMsg = vence || 'Permanente';
+        ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo de venta: $${precioVenta.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    // Estado: esperando nombre para key
     if (esperandoNombreKey[userId]) {
         delete esperandoNombreKey[userId];
         const nombre = ctx.message.text.trim();
         const k = keyActiva[userId];
-        
-        if (!k) return ctx.reply("❌ Error, usa /activarkey de nuevo.");
-        
-        await pool.query('UPDATE user_keys SET user_id = NULL WHERE user_id = $1', [userId]);
-        await pool.query('UPDATE master_keys SET user_id = $1, nombre = $2 WHERE key = $3', [userId, nombre, k.key]);
+
+        if (!k) return ctx.reply("❌ Error, intenta de nuevo con /start.");
+
+        await pool.query('UPDATE user_keys SET user_id = NULL, nombre = NULL WHERE user_id = $1', [userId]);
+        await pool.query('UPDATE master_keys SET user_id = NULL, nombre = NULL WHERE user_id = $1', [userId]);
+
+        if (k.tipo === 'master') {
+            await pool.query('UPDATE master_keys SET user_id = $1, nombre = $2 WHERE key = $3', [userId, nombre, k.key]);
+        } else {
+            await pool.query('UPDATE user_keys SET user_id = $1, nombre = $2 WHERE key = $3', [userId, nombre, k.key]);
+        }
+
         delete keyActiva[userId];
-        ctx.reply(`✅ ¡Hola ${nombre}! Key activada.\nUsa /menu para ver tu perfil.`);
-        return;
+        await ctx.reply(`✅ ¡Hola ${nombre}! Key activada con éxito.`);
+        return enviarStart(ctx);
     }
     
     // Estado: esperando monto de recarga (solo owner)
@@ -605,17 +988,65 @@ bot.on('text', async (ctx) => {
         delete esperandoActivarKey[userId];
         const keyIngresada = ctx.message.text.trim();
         
+        // Buscar en user_keys
         const keyData = await pool.query('SELECT * FROM user_keys WHERE key = $1 AND activa = true', [keyIngresada]);
-        if (keyData.rowCount === 0) return ctx.reply("❌ Key no encontrada o inactiva.");
-        
-        const key = keyData.rows[0];
-        if (key.vencimiento && new Date(key.vencimiento) < new Date()) {
-            return ctx.reply("❌ Key expirada.");
+        if (keyData.rowCount > 0) {
+            const key = keyData.rows[0];
+            if (key.vencimiento && new Date(key.vencimiento) < new Date()) {
+                return ctx.reply("❌ Key expirada.");
+            }
+            if (key.user_id) return ctx.reply("❌ Esta key ya fue activada.");
+            
+            keyActiva[ctx.from.id] = { key: keyIngresada, tipo: 'user' };
+            esperandoNombreKey[ctx.from.id] = true;
+            ctx.reply("✅ Key de usuario válida. Ingresa tu nombre:");
+            return;
         }
         
-        await pool.query('UPDATE user_keys SET user_id = $1 WHERE key = $2', [userId, keyIngresada]);
+        // Buscar en master_keys
+        const masterData = await pool.query('SELECT * FROM master_keys WHERE key = $1', [keyIngresada]);
+        if (masterData.rowCount > 0) {
+            if (masterData.rows[0].user_id) return ctx.reply("❌ Esta key ya fue activada.");
+            keyActiva[ctx.from.id] = { key: keyIngresada, tipo: 'master' };
+            esperandoNombreKey[ctx.from.id] = true;
+            ctx.reply("✅ Key maestra válida. Ingresa tu nombre:");
+            return;
+        }
         
-        ctx.reply(`✅ Key activada!\nUsa /nequi para consultar.`);
+        return ctx.reply("❌ Key no encontrada o inactiva.");
+    }
+    
+    // Estado: esperando tiempo para nueva key (desde /miskeys)
+    if (esperandoTiempoKey[userId]) {
+        delete esperandoTiempoKey[userId];
+        const tiempo = ctx.message.text.trim().toLowerCase();
+        const master = await pool.query('SELECT * FROM master_keys WHERE user_id = $1', [userId]);
+        if (master.rowCount === 0) return ctx.reply("❌ No tienes una key maestra activa.");
+        
+        let costo, precioVenta, dias, vence;
+        if (tiempo === 'perm') {
+            costo = 150000;
+            precioVenta = 200000;
+            dias = 36500;
+            vence = null;
+        } else {
+            dias = parseInt(tiempo);
+            if (dias === 1) { costo = 7000; precioVenta = 10000; }
+            else if (dias === 7) { costo = 15000; precioVenta = 20000; }
+            else if (dias === 30) { costo = 55000; precioVenta = 70000; }
+            else return ctx.reply("❌ Tiempo no válido.\n\n⏱️ Opciones:\n• 1 → 1 día ($7.000)\n• 7 → 7 días ($15.000)\n• 30 → 30 días ($55.000)\n• perm → Permanente ($150.000)\n\n⚠️ Este valor se descuenta de tu balance.");
+            vence = fechaVencimiento(dias);
+        }
+        
+        if (master.rows[0].balance < costo) return ctx.reply(`❌ Balance insuficiente.\n💰 Necesitas: $${costo.toLocaleString()}\n💰 Tienes: $${master.rows[0].balance.toLocaleString()}`);
+        
+        const newKey = generarKey('user');
+        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, master.rows[0].key]);
+        await pool.query('UPDATE master_keys SET balance = balance - $1 WHERE user_id = $2', [costo, userId]);
+        
+        const nuevoBalance = master.rows[0].balance - costo;
+        const venceMsg = vence || 'Permanente';
+        ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo: $${costo.toLocaleString()}\n💰 Costo de venta: $${precioVenta.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
         return;
     }
     
@@ -625,9 +1056,6 @@ bot.on('text', async (ctx) => {
     const numero = ctx.message.text.trim();
     if (isNaN(numero) || numero.length < 7) return ctx.reply("❌ Número inválido.");
 
-    const accesoAutorizado = await verificarAcceso(ctx);
-    if (!accesoAutorizado) return;
-
     if (cacheConsultas[numero]) {
         const d = cacheConsultas[numero];
         let r = `📱 <b>Celular:</b> <code>${numero}</code> (Caché)\n\n`;
@@ -636,16 +1064,26 @@ bot.on('text', async (ctx) => {
     }
 
     const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
-    
+
     const apiPromise = axios.get(`https://lsdarkapi.pages.dev/api/v1/nequi/consulta?numero=${numero}`, {
         headers: { 'X-API-Key': '4b5659c0efe6897940606d8b1b67f020c8ee5e6d313d11094765a26fd8138e11' },
-        timeout: 10000
+        timeout: 15000
     });
 
-    ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "⚡ [████░░░░░░] 40%", { parse_mode: 'HTML' }).catch(()=>{});
+    let completed = false;
+    let progressPct = 20;
+
+    const progressInterval = setInterval(() => {
+        if (completed) { clearInterval(progressInterval); return; }
+        const fill = progressPct / 10;
+        const bar = "█".repeat(fill) + "░".repeat(10 - fill);
+        ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `⚡ [${bar}] ${progressPct}%`, { parse_mode: 'HTML' }).catch(()=>{});
+        progressPct = Math.min(progressPct + 20, 90);
+    }, 500);
 
     try {
         const res = await apiPromise;
+        completed = true;
         const data = res.data;
 
         if (data.error) {
@@ -677,7 +1115,14 @@ bot.on('text', async (ctx) => {
         setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
         ctx.reply(r);
     } catch (e) {
-        ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "❌ Error al conectar.", { parse_mode: 'HTML' }).catch(()=>{});
+        completed = true;
+        clearInterval(progressInterval);
+        const detalle = e.code === 'ECONNABORTED' ? '⏱️ Tiempo de espera agotado (15s)' :
+                        e.code === 'ENOTFOUND' ? '🌐 Servicio de consulta no disponible' :
+                        e.code === 'ECONNREFUSED' ? '🔒 Conexión rechazada' :
+                        e.response?.data?.error || e.message;
+        console.error("❌ Error en consulta Nequi:", e.code, e.message);
+        ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ Error: ${detalle}`, { parse_mode: 'HTML' }).catch(()=>{});
     }
 });
 
