@@ -884,6 +884,7 @@ bot.command('recargasaldo', async (ctx) => {
 
 bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
+    const inicioTiempo = Date.now();
     
     // Estado: esperando días para genkey
     if (esperandoGenkeyDias[userId]) {
@@ -1152,25 +1153,37 @@ bot.on('text', async (ctx) => {
             tiempo: '⏱️', creador: '👨‍💻'
         };
         
-        let r = `👁️ <b>EL OJO DE DIOS</b>\n\n📱 <b>${numero}</b>\n\n`;
-        
-        const ignorar = ['ok','api_online','motor_respondio','blocked','invalid_phone','session_error','notification','creador','error','consulta'];
+        const ignorar = ['ok','api_online','motor_respondio','blocked','invalid_phone','session_error','notification','creador','error','consulta','tiempo'];
+        const campos = [];
         const procesados = new Set();
+        let tiempoApi = null;
         
-        const mostrarCampo = (k, v) => {
+        const agregarCampo = (k, v) => {
             const key = k.toLowerCase();
             if (ignorar.includes(key) || procesados.has(key) || v == null || typeof v === 'object') return;
             procesados.add(key);
+            const label = k.replace(/_/g, ' ').toUpperCase();
             const emoji = emojis[key] || '🔹';
-            const label = k.replace(/_/g, ' ');
-            r += `${emoji} <i>${label}:</i> <b>${v}</b>\n`;
+            campos.push({ label, valor: v, emoji });
         };
         
+        const tiempoReal = ((Date.now() - inicioTiempo) / 1000).toFixed(1);
+        tiempoApi = tiempoReal;
         if (data.consulta && typeof data.consulta === 'object') {
-            for (const [k, v] of Object.entries(data.consulta)) mostrarCampo(k, v);
+            for (const [k, v] of Object.entries(data.consulta)) agregarCampo(k, v);
         }
-        for (const [k, v] of Object.entries(data)) mostrarCampo(k, v);
-        r += `\n✨ by @DarkNull1 | @El_CuervoX`;
+        for (const [k, v] of Object.entries(data)) agregarCampo(k, v);
+        
+        let r = `👁️ <b>EL OJO DE DIOS</b>\n\n`;
+        r += `┌──────────────────────────┐\n`;
+        r += `📱 <b>CELULAR:</b> <code>${numero}</code>\n`;
+        r += `├──────────────────────────┤\n`;
+        campos.forEach(c => {
+            r += `${c.emoji} <b>${c.label}:</b> <code>${c.valor}</code>\n`;
+        });
+        r += `⏱️ <b>TIEMPO:</b> <code>${tiempoApi}s</code>\n`;
+        r += `└──────────────────────────┘\n`;
+        r += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
         
         ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
         setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
