@@ -20,7 +20,6 @@ const pool = new Pool({
 
 // Control de estados en memoria (temporal por consulta)
 const esperandoNumero = {};
-const cacheConsultas = {}; 
 const esperandoValorKey = {};
 const esperandoActivarKey = {};
 const esperandoNombreKey = {};
@@ -1108,13 +1107,6 @@ bot.on('text', async (ctx) => {
     const numero = ctx.message.text.trim();
     if (isNaN(numero) || numero.length < 7) return ctx.reply("❌ Número inválido.");
 
-    if (cacheConsultas[numero]) {
-        const d = cacheConsultas[numero];
-        let r = `📱 <b>Celular:</b> <code>${numero}</code> (Caché)\n\n`;
-        for (const [k, v] of Object.entries(d)) { r += `🔹 <b>${k.toUpperCase()}:</b> <code>${v}</code>\n`; }
-        return ctx.reply(r, { parse_mode: 'HTML' });
-    }
-
     const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
 
     const apiPromise = axios.post(`https://lsdarkapi.pages.dev/api/v1/nequi/consulta`,
@@ -1146,7 +1138,6 @@ bot.on('text', async (ctx) => {
             return ctx.reply(`⚠️ ${data.error}`);
         }
 
-        cacheConsultas[numero] = data;
         let r = `👁️ EL OJO DE DIOS\n\n📱 ${numero}\n\n`;
         
         if (data.consulta) {
