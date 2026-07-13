@@ -1166,7 +1166,7 @@ bot.on('text', async (ctx) => {
         
         ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
         setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
-        ctx.reply(r);
+        ctx.reply(r, { parse_mode: 'HTML' });
     } catch (e) {
         completed = true;
         clearInterval(progressInterval);
