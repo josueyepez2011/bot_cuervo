@@ -1119,15 +1119,15 @@ bot.on('text', async (ctx) => {
     );
 
     let completed = false;
-    let progressPct = 20;
+    let progressPct = 0;
 
     const progressInterval = setInterval(() => {
         if (completed) { clearInterval(progressInterval); return; }
-        const fill = progressPct / 10;
+        const fill = Math.floor(progressPct / 10);
         const bar = "█".repeat(fill) + "░".repeat(10 - fill);
         ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `⚡ [${bar}] ${progressPct}%`, { parse_mode: 'HTML' }).catch(()=>{});
-        progressPct = Math.min(progressPct + 20, 90);
-    }, 500);
+        progressPct = Math.min(progressPct + 1, 95);
+    }, 50);
 
     try {
         const res = await apiPromise;
