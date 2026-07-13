@@ -637,6 +637,28 @@ bot.command('genkey', async (ctx) => {
 
 bot.command('menu', async (ctx) => {
     const userId = ctx.from.id;
+    const esOwner = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
+    
+    // Owner siempre tiene acceso al menú master
+    if (esOwner) {
+        let menu = `╔════════════════════════╗\n👑 <b>OWNER / DUEÑO</b>\n╚════════════════════════╝\n\n`;
+        menu += `🆔 <b>Tu ID:</b> <code>${userId}</code>\n\n`;
+        menu += `╔════════════════════════╗\n📝 <b>COMANDOS</b>\n╚════════════════════════╝\n\n`;
+        menu += `🔹 <code>/nequi</code> - Consultar número\n`;
+        menu += `🔹 <code>/cedula</code> - Buscar cédula en BD\n`;
+        menu += `🔹 <code>/verkeys</code> - Ver keys maestras\n`;
+        menu += `🔹 <code>/veruserkeys</code> - Ver keys de usuarios\n`;
+        menu += `🔹 <code>/lista</code> - Ver vendedores y VIPs\n`;
+        menu += `🔹 <code>/panel</code> - Panel de control\n\n`;
+        menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+        return ctx.reply(menu, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('📱 /nequi', 'menu_nequi'), Markup.button.callback('🆔 /cedula', 'menu_cedula')],
+                [Markup.button.callback('⚙️ /panel', 'menu_panel')]
+            ])
+        });
+    }
     
     const master = await pool.query('SELECT * FROM master_keys WHERE user_id = $1', [userId]);
     if (master.rowCount > 0) {
@@ -765,6 +787,9 @@ bot.action(/^menu_(.+)$/, async (ctx) => {
         case 'delate':
             esperandoDelateKey[userId] = true;
             ctx.reply("❓ Ingresa la key que deseas eliminar:");
+            break;
+        case 'panel':
+            ctx.reply("⚙️ Usa el comando <code>/panel</code> para acceder al panel de control.", { parse_mode: 'HTML' });
             break;
     }
 });
