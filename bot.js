@@ -145,10 +145,11 @@ async function verificarAcceso(ctx) {
     try {
         const result = await pool.query(`
             SELECT 
-                (SELECT 1 FROM sellers WHERE seller_id = $1) as es_seller,
-                (SELECT acceso FROM vips WHERE cliente_id = $1) as vip_acceso,
-                (SELECT vencimiento FROM user_keys WHERE user_id = $1) as user_key_vencimiento,
-                (SELECT 1 FROM master_keys WHERE user_id = $1) as es_master
+                (SELECT 1 FROM sellers WHERE seller_id = $1 LIMIT 1) as es_seller,
+                (SELECT acceso FROM vips WHERE cliente_id = $1 LIMIT 1) as vip_acceso,
+                (SELECT vencimiento FROM user_keys WHERE user_id = $1 LIMIT 1) as user_key_vencimiento,
+                (SELECT 1 FROM master_keys WHERE user_id = $1 LIMIT 1) as es_master,
+                (SELECT 1 FROM user_keys WHERE user_id = $1 LIMIT 1) as es_user_key
         `, [userId]);
 
         const row = result.rows[0];
@@ -160,6 +161,8 @@ async function verificarAcceso(ctx) {
             if (new Date(row.vip_acceso) > new Date()) return true;
         }
 
+        if (row.es_master) return true;
+
         if (row.user_key_vencimiento) {
             if (new Date(row.user_key_vencimiento) < new Date()) {
                 await pool.query('UPDATE user_keys SET user_id = NULL WHERE user_id = $1', [userId]);
@@ -169,7 +172,7 @@ async function verificarAcceso(ctx) {
             return true;
         }
 
-        if (row.es_master) return true;
+        if (row.es_user_key) return true;
 
         ctx.reply("❌ No tienes acceso, compra tu acceso con @DarkNull1 | @El_CuervoX");
         return false;
@@ -358,14 +361,17 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
             ctx.reply("💰 Ingresa el valor de la cuenta (ejemplo: 100000):");
             break;
         case 'genkey':
-            if (!esOwner) return;
-            esperandoGenkeyDias[userId] = true;
-            ctx.reply("⏱️ Por favor selecciona los días:\n\n• 1 Dia\n• 7 Dias\n• 30Dias\n• perm (permanente)\n\nResponde con el número o 'perm':");
+            {
+                const tieneMaster = await pool.query('SELECT 1 FROM master_keys WHERE user_id = $1', [userId]);
+                if (!esOwner && tieneMaster.rowCount === 0) return;
+                esperandoGenkeyDias[userId] = true;
+                ctx.reply("⏱️ Por favor selecciona los días:\n\n• 1 Dia\n• 7 Dias\n• 30 Dias\n• perm (permanente)\n\nResponde con el número o 'perm':");
+            }
             break;
         case 'verkeys':
             if (!esOwner) return;
-            const vk = await pool.query('SELECT * FROM master_keys WHERE owner_id = $1', [userId]);
-            if (vk.rowCount === 0) return ctx.reply("❌ No tienes keys creadas.");
+            const vk = await pool.query('SELECT * FROM master_keys');
+            if (vk.rowCount === 0) return ctx.reply("❌ No tienes keys maestras creadas.");
             let outVk = `╔════════════════════════╗\n🔑 <b>KEYS MAESTRAS</b>\n╚════════════════════════╝\n\n`;
             vk.rows.forEach(k => {
                 outVk += `├ <code>${k.key}</code>\n`;
@@ -376,19 +382,27 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
             ctx.reply(outVk, { parse_mode: 'HTML' });
             break;
         case 'veruserkeys':
-            if (!esOwner) return;
-            const vuk = await pool.query('SELECT * FROM user_keys WHERE owner_key IN (SELECT key FROM master_keys WHERE owner_id = $1)', [userId]);
-            if (vuk.rowCount === 0) return ctx.reply("❌ No hay keys de usuarios.");
-            let outVuk = `╔════════════════════════╗\n👥 <b>KEYS DE USUARIOS</b>\n╚════════════════════════╝\n\n`;
-            vuk.rows.forEach(k => {
-                const estado = k.activa ? '✅' : '❌';
-                const vence = k.vencimiento || 'Sin fecha';
-                outVuk += `${estado} <code>${k.key}</code>\n`;
-                outVuk += `│ 👤 ${k.nombre || 'Sin nombre'}\n`;
-                outVuk += `│ 📅 Vence: ${vence}\n\n`;
-            });
-            outVuk += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
-            ctx.reply(outVuk, { parse_mode: 'HTML' });
+            {
+                const tieneMaster = await pool.query('SELECT 1 FROM master_keys WHERE user_id = $1', [userId]);
+                if (!esOwner && tieneMaster.rowCount === 0) return;
+                const vuk = await pool.query('SELECT * FROM user_keys ORDER BY created_at DESC');
+                if (vuk.rowCount === 0) return ctx.reply("❌ No hay keys de usuarios.");
+                let outVuk = `╔════════════════════════╗\n👥 <b>KEYS DE USUARIOS</b>\n╚════════════════════════╝\n\n`;
+                const now = new Date();
+                vuk.rows.forEach(k => {
+                    const expirada = k.vencimiento && new Date(k.vencimiento) < now;
+                    let estado;
+                    if (expirada) estado = '❌ Expirada';
+                    else if (k.user_id) estado = '✅ Usada';
+                    else estado = '⏳ Disponible';
+                    const vence = k.vencimiento || 'Permanente';
+                    outVuk += `${estado} <code>${k.key}</code>\n`;
+                    outVuk += `│ 👤 ${k.nombre || 'Sin nombre'}\n`;
+                    outVuk += `│ 📅 Vence: ${vence}\n\n`;
+                });
+                outVuk += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+                ctx.reply(outVuk, { parse_mode: 'HTML' });
+            }
             break;
         case 'delkey':
             if (!esOwner) return;
@@ -539,9 +553,9 @@ bot.command('activarkey', async (ctx) => {
                 return ctx.reply("❌ Key expirada.");
             }
             if (key.user_id) return ctx.reply("❌ Esta key ya fue activada.");
-            await pool.query('UPDATE master_keys SET user_id = NULL, nombre = NULL WHERE user_id = $1', [ctx.from.id]);
-            await pool.query('UPDATE user_keys SET user_id = $1 WHERE key = $2', [ctx.from.id, keyIngresada]);
-            ctx.reply("✅ Key activada!\nUsa /nequi para consultar.");
+            keyActiva[ctx.from.id] = { key: keyIngresada, tipo: 'user' };
+            esperandoNombreKey[ctx.from.id] = true;
+            ctx.reply("✅ Key de usuario válida. Ingresa tu nombre:");
             return;
         }
         
@@ -563,31 +577,66 @@ bot.command('activarkey', async (ctx) => {
 
 bot.command('verkeys', async (ctx) => {
     if (ctx.from.id !== OWNER_IDS[0] && ctx.from.id !== OWNER_IDS[1]) return;
-    
-    const keys = await pool.query('SELECT * FROM master_keys WHERE owner_id = $1', [ctx.from.id]);
-    if (keys.rowCount === 0) return ctx.reply("❌ No tienes keys creadas.");
-    
-    let output = `╔════════════════════════╗\n🔑 <b>KEYS MAESTRAS</b>\n╚════════════════════════╝\n\n`;
-    keys.rows.forEach(k => {
-        output += `├ <code>${k.key}</code>\n`;
-        output += `│ 💰 Balance: $${k.balance.toLocaleString()}\n`;
-        output += `│ 📅 ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n\n`;
-    });
+
+    const masterKeys = await pool.query('SELECT * FROM master_keys ORDER BY created_at DESC');
+    const userKeys = await pool.query('SELECT * FROM user_keys ORDER BY created_at DESC');
+
+    let output = `╔════════════════════════╗\n🔑 <b>TODAS LAS KEYS</b>\n╚════════════════════════╝\n\n`;
+
+    output += `━━━ 👑 KEYS MAESTRAS (${masterKeys.rowCount}) ━━━\n\n`;
+    if (masterKeys.rowCount === 0) {
+        output += `❌ No hay keys maestras.\n\n`;
+    } else {
+        masterKeys.rows.forEach(k => {
+            const activa = k.user_id ? '✅ Activa' : '💤 Sin activar';
+            output += `├ <code>${k.key}</code> ${activa}\n`;
+            output += `│ 💰 $${k.balance.toLocaleString()} | 👤 ${k.nombre || '—'} | 📅 ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n\n`;
+        });
+    }
+
+    output += `━━━ 👥 KEYS DE USUARIO (${userKeys.rowCount}) ━━━\n\n`;
+    if (userKeys.rowCount === 0) {
+        output += `❌ No hay keys de usuarios.\n`;
+    } else {
+        userKeys.rows.forEach(k => {
+            const now = new Date();
+            const expirada = k.vencimiento && new Date(k.vencimiento) < now;
+            let estado;
+            if (expirada) estado = '❌ Expirada';
+            else if (k.user_id) estado = '✅ Usada';
+            else estado = '⏳ Disponible';
+            const vence = k.vencimiento || 'Permanente';
+            output += `${estado} <code>${k.key}</code>\n`;
+            output += `│ 👤 ${k.nombre || 'Sin nombre'} | 📅 Vence: ${vence}\n\n`;
+        });
+    }
+
     output += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
     ctx.reply(output, { parse_mode: 'HTML' });
 });
 
 bot.command('veruserkeys', async (ctx) => {
-    if (ctx.from.id !== OWNER_IDS[0] && ctx.from.id !== OWNER_IDS[1]) return;
-    
-    const keys = await pool.query('SELECT * FROM user_keys WHERE owner_key IN (SELECT key FROM master_keys WHERE owner_id = $1)', [ctx.from.id]);
+    const userId = ctx.from.id;
+    const esOwner = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
+    const tieneMaster = await pool.query('SELECT 1 FROM master_keys WHERE user_id = $1', [userId]);
+
+    if (!esOwner && tieneMaster.rowCount === 0) return;
+
+    const keys = await pool.query('SELECT * FROM user_keys ORDER BY created_at DESC');
     if (keys.rowCount === 0) return ctx.reply("❌ No hay keys de usuarios.");
-    
+
     let output = `╔════════════════════════╗\n👥 <b>KEYS DE USUARIOS</b>\n╚════════════════════════╝\n\n`;
+    const now = new Date();
     keys.rows.forEach(k => {
-        const estado = k.activa ? '✅' : '❌';
-        const vence = k.vencimiento || 'Sin fecha';
-        output += `${estado} <code>${k.key}</code>\n`;
+        const expirada = k.vencimiento && new Date(k.vencimiento) < now;
+        let estado;
+        if (!k.activa) estado = '💀 Inactiva';
+        else if (expirada) estado = '❌ Expirada';
+        else if (k.user_id) estado = '✅ Usada';
+        else estado = '⏳ Disponible';
+        const vence = k.vencimiento || 'Permanente';
+        output += `<code>${k.key}</code>\n`;
+        output += `│ 📌 Estado: ${estado}\n`;
         output += `│ 👤 ${k.nombre || 'Sin nombre'}\n`;
         output += `│ 📅 Vence: ${vence}\n\n`;
     });
@@ -637,28 +686,6 @@ bot.command('genkey', async (ctx) => {
 
 bot.command('menu', async (ctx) => {
     const userId = ctx.from.id;
-    const esOwner = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
-    
-    // Owner siempre tiene acceso al menú master
-    if (esOwner) {
-        let menu = `╔════════════════════════╗\n👑 <b>OWNER / DUEÑO</b>\n╚════════════════════════╝\n\n`;
-        menu += `🆔 <b>Tu ID:</b> <code>${userId}</code>\n\n`;
-        menu += `╔════════════════════════╗\n📝 <b>COMANDOS</b>\n╚════════════════════════╝\n\n`;
-        menu += `🔹 <code>/nequi</code> - Consultar número\n`;
-        menu += `🔹 <code>/cedula</code> - Buscar cédula en BD\n`;
-        menu += `🔹 <code>/verkeys</code> - Ver keys maestras\n`;
-        menu += `🔹 <code>/veruserkeys</code> - Ver keys de usuarios\n`;
-        menu += `🔹 <code>/lista</code> - Ver vendedores y VIPs\n`;
-        menu += `🔹 <code>/panel</code> - Panel de control\n\n`;
-        menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
-        return ctx.reply(menu, {
-            parse_mode: 'HTML',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('📱 /nequi', 'menu_nequi'), Markup.button.callback('🆔 /cedula', 'menu_cedula')],
-                [Markup.button.callback('⚙️ /panel', 'menu_panel')]
-            ])
-        });
-    }
     
     const master = await pool.query('SELECT * FROM master_keys WHERE user_id = $1', [userId]);
     if (master.rowCount > 0) {
@@ -700,7 +727,8 @@ bot.command('menu', async (ctx) => {
         const k = userKey.rows[0];
         let menu = `╔════════════════════════╗\n👤 <b>MI PERFIL</b>\n╚════════════════════════╝\n\n`;
         menu += `🔑 <b>Key:</b> <code>${k.key}</code>\n`;
-        menu += `📅 <b>Creada:</b> ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n\n`;
+        menu += `📅 <b>Creada:</b> ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n`;
+        menu += `📅 <b>Vence:</b> ${k.vencimiento || 'Permanente'}\n\n`;
         menu += `📝 <b>COMANDOS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Buscar cédula en BD\n`;
         menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
         return ctx.reply(menu, {
@@ -787,9 +815,6 @@ bot.action(/^menu_(.+)$/, async (ctx) => {
         case 'delate':
             esperandoDelateKey[userId] = true;
             ctx.reply("❓ Ingresa la key que deseas eliminar:");
-            break;
-        case 'panel':
-            ctx.reply("⚙️ Usa el comando <code>/panel</code> para acceder al panel de control.", { parse_mode: 'HTML' });
             break;
     }
 });
@@ -1007,7 +1032,9 @@ bot.on('text', async (ctx) => {
             vence = fechaVencimiento(dias);
         }
         const newKey = generarKey('user');
-        await pool.query('INSERT INTO user_keys (key, vencimiento) VALUES ($1, $2)', [newKey, vence]);
+        const master = await pool.query('SELECT key FROM master_keys WHERE user_id = $1', [userId]);
+        const ownerKey = master.rowCount > 0 ? master.rows[0].key : null;
+        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, ownerKey]);
         const venceMsg = vence || 'Permanente';
         ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
         return;
