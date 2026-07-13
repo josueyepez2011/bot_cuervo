@@ -1138,21 +1138,28 @@ bot.on('text', async (ctx) => {
             return ctx.reply(`⚠️ ${data.error}`);
         }
 
-        let r = `👁️ EL OJO DE DIOS\n\n📱 ${numero}\n\n`;
+        const emojis = {
+            nombre_completo: '👤', primer_nombre: '✏️', segundo_nombre: '✏️',
+            primer_apellido: '📛', segundo_apellido: '📛',
+            documento: '🆔', numero: '📞', tipo_documento: '📋',
+            nombre: '👤', apellido: '📛', cedula: '🆔',
+            telefono: '📞', direccion: '📍', email: '📧',
+            ciudad: '🏙️', departamento: '🗺️', pais: '🌎',
+            fecha_nacimiento: '🎂', edad: '🔢', sexo: '⚧️',
+            estado_civil: '💍', ocupacion: '💼',
+            banco: '🏦', tipo_cuenta: '💳', saldo: '💰',
+            ok: '✅', api_online: '🌐', motor_respondio: '⚙️',
+            tiempo: '⏱️', creador: '👨‍💻'
+        };
         
-        if (data.consulta) {
-            for (const [k, v] of Object.entries(data.consulta)) {
-                if (v && typeof v !== 'object') {
-                    const nombre = k.charAt(0).toUpperCase() + k.slice(1);
-                    r += `${nombre}: ${v}\n`;
-                }
-            }
-        } else {
-            for (const [k, v] of Object.entries(data)) {
-                if (!['ok','api_online','motor_respondio','blocked','invalid_phone','session_error','notification','creador','error'].includes(k) && v && typeof v !== 'object') {
-                    const nombre = k.charAt(0).toUpperCase() + k.slice(1);
-                    r += `${nombre}: ${v}\n`;
-                }
+        let r = `👁️ <b>EL OJO DE DIOS</b>\n\n📱 <b>${numero}</b>\n\n`;
+        
+        const campos = data.consulta || data;
+        for (const [k, v] of Object.entries(campos)) {
+            if (!['ok','api_online','motor_respondio','blocked','invalid_phone','session_error','notification','creador','error'].includes(k) && v != null && typeof v !== 'object') {
+                const emoji = emojis[k.toLowerCase()] || '🔹';
+                const label = k.replace(/_/g, ' ');
+                r += `${emoji} <b>${label}:</b> ${v}\n`;
             }
         }
         r += `\n✨ by @DarkNull1 | @El_CuervoX`;
