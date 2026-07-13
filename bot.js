@@ -275,6 +275,7 @@ bot.command('panel', async (ctx) => {
         buttons.push([Markup.button.callback('❌ /delkey [KEY]', 'panel_delkey')]);
         buttons.push([Markup.button.callback('🗑️ /delallkeys', 'panel_delallkeys')]);
         buttons.push([Markup.button.callback('💰 /recargasaldo', 'panel_recargasaldo')]);
+        buttons.push([Markup.button.callback('📢 Notificaciones', 'panel_notificaciones')]);
     } else {
         buttons.push([Markup.button.callback('🔑 /activarkey', 'panel_activarkey')]);
     }
@@ -349,6 +350,23 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
         case 'activarkey':
             esperandoActivarKey[userId] = true;
             ctx.reply("🔑 Pega tu key:");
+            break;
+        case 'notificaciones':
+            if (!esOwner) return;
+            const notis = await pool.query('SELECT * FROM notifications ORDER BY created_at DESC LIMIT 20');
+            if (notis.rowCount === 0) return ctx.reply("📭 No hay notificaciones.");
+            let outNotis = `╔════════════════════════╗\n📢 <b>NOTIFICACIONES</b>\n╚════════════════════════╝\n\n`;
+            notis.rows.forEach((n, i) => {
+                const fecha = new Date(n.created_at).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+                outNotis += `#${i + 1} 📅 ${fecha}\n${n.mensaje}\n\n`;
+            });
+            outNotis += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            ctx.reply(outNotis, {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('🗑️ Eliminar todas', 'eliminar_notificaciones')]
+                ])
+            });
             break;
     }
 });
@@ -705,7 +723,21 @@ bot.command('venderkey', async (ctx) => {
     
     const nuevoBalance = master.rows[0].balance - costo;
     const venceMsg = vence || 'Permanente';
-    ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo: $${costo.toLocaleString()}\n💰 Costo de venta: $${precioVenta.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+    await ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo: $${costo.toLocaleString()}\n💰 Costo de venta: $${precioVenta.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+
+    try {
+        const from = ctx.from;
+        const resumen = `🔑 Key generada (venta)\n\n👤 Vendedor: ${from.first_name || ''} ${from.last_name || ''} (@${from.username || 'sin username'})\n🆔 ID: ${from.id}\n🔐 Key maestra: ${master.rows[0].key}\n🆕 Key generada: ${newKey}\n📅 Vence: ${venceMsg}\n💰 Costo: $${costo.toLocaleString()}\n💰 Precio venta: $${precioVenta.toLocaleString()}`;
+        for (const ownerId of OWNER_IDS) {
+            await bot.telegram.sendMessage(ownerId, resumen);
+        }
+        await pool.query(
+            'INSERT INTO notifications (tipo, mensaje, creado_por, key_maestra, key_generada, vencimiento, costo) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            ['venderkey', resumen, ctx.from.id, master.rows[0].key, newKey, venceMsg, costo]
+        );
+    } catch (err) {
+        console.error('❌ Error al enviar notificación:', err.message);
+    }
 });
 
 bot.command('preciokey', async (ctx) => {
@@ -760,6 +792,12 @@ bot.command('miskeys', async (ctx) => {
     } else {
         ctx.reply(output, { parse_mode: 'HTML' });
     }
+});
+
+bot.action('eliminar_notificaciones', async (ctx) => {
+    await ctx.answerCbQuery();
+    await pool.query('DELETE FROM notifications');
+    ctx.editMessageText("🗑️ Todas las notificaciones eliminadas.");
 });
 
 bot.action('eliminar_keys_expiradas', async (ctx) => {
@@ -919,7 +957,21 @@ bot.on('text', async (ctx) => {
         await pool.query('UPDATE master_keys SET balance = balance - $1 WHERE user_id = $2', [costo, userId]);
         const nuevoBalance = master.rows[0].balance - costo;
         const venceMsg = vence || 'Permanente';
-        ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo de venta: $${precioVenta.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+        await ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n💰 Costo de venta: $${precioVenta.toLocaleString()}\n💰 Balance: $${nuevoBalance.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+
+        try {
+            const from = ctx.from;
+            const resumen = `🔑 Key generada (venta)\n\n👤 Vendedor: ${from.first_name || ''} ${from.last_name || ''} (@${from.username || 'sin username'})\n🆔 ID: ${from.id}\n🔐 Key maestra: ${master.rows[0].key}\n🆕 Key generada: ${newKey}\n📅 Vence: ${venceMsg}\n💰 Costo: $${costo.toLocaleString()}\n💰 Precio venta: $${precioVenta.toLocaleString()}`;
+            for (const ownerId of OWNER_IDS) {
+                await bot.telegram.sendMessage(ownerId, resumen);
+            }
+            await pool.query(
+                'INSERT INTO notifications (tipo, mensaje, creado_por, key_maestra, key_generada, vencimiento, costo) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                ['venderkey', resumen, ctx.from.id, master.rows[0].key, newKey, venceMsg, costo]
+            );
+        } catch (err) {
+            console.error('❌ Error al enviar notificación:', err.message);
+        }
         return;
     }
 
