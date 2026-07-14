@@ -392,9 +392,9 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
                 vuk.rows.forEach(k => {
                     const expirada = k.vencimiento && new Date(k.vencimiento) < now;
                     let estado;
-                    if (expirada) estado = '❌ Expirada';
-                    else if (k.user_id) estado = '✅ Usada';
-                    else estado = '⏳ Disponible';
+                    if (expirada) estado = '❌ Key Expirada';
+                    else if (k.user_id) estado = '✅ key Usada';
+                    else estado = '⏳ key Disponible';
                     const vence = k.vencimiento || 'Permanente';
                     outVuk += `${estado} <code>${k.key}</code>\n`;
                     outVuk += `│ 👤 ${k.nombre || 'Sin nombre'}\n`;
