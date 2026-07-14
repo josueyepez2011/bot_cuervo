@@ -1246,7 +1246,21 @@ bot.on('text', async (ctx) => {
         const newKey = generarKey('master');
         await pool.query('INSERT INTO master_keys (key, balance, owner_id) VALUES ($1, $2, $3)', [newKey, valor, userId]);
         
-        ctx.reply(`✅ Key maestra creada:\n\n🔑 <code>${newKey}</code>\n💰 Balance: $${valor.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+        await ctx.reply(`✅ Key maestra creada:\n\n🔑 <code>${newKey}</code>\n💰 Balance: $${valor.toLocaleString()}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+
+        try {
+            const from = ctx.from;
+            const resumen = `🔑 Key maestra creada\n\n👤 Creada por: ${from.first_name || ''} ${from.last_name || ''} (@${from.username || 'sin username'})\n🆔 ID: ${from.id}\n🔐 Key: ${newKey}\n💰 Balance: $${valor.toLocaleString()}`;
+            for (const ownerId of OWNER_IDS) {
+                await bot.telegram.sendMessage(ownerId, resumen);
+            }
+            await pool.query(
+                'INSERT INTO notifications (tipo, mensaje, creado_por, key_maestra, key_generada) VALUES ($1, $2, $3, $4, $5)',
+                ['key', resumen, ctx.from.id, newKey, null]
+            );
+        } catch (err) {
+            console.error('❌ Error al enviar notificación:', err.message);
+        }
         return;
     }
     
