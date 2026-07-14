@@ -681,7 +681,21 @@ bot.command('genkey', async (ctx) => {
     await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, masterKey]);
     await pool.query('UPDATE master_keys SET balance = balance - 1 WHERE key = $1', [masterKey]);
     
-    ctx.reply(`✅ Key generada:\n<code>${newKey}</code>\n📅 Vence: ${vence}`, { parse_mode: 'HTML' });
+    await ctx.reply(`✅ Key generada:\n<code>${newKey}</code>\n📅 Vence: ${vence}`, { parse_mode: 'HTML' });
+
+    try {
+        const from = ctx.from;
+        const resumen = `🔑 Key generada\n\n👤 Generada por: ${from.first_name || ''} ${from.last_name || ''} (@${from.username || 'sin username'})\n🆔 ID: ${from.id}\n🔐 Key maestra: ${masterKey}\n🆕 Key generada: ${newKey}\n📅 Vence: ${vence}`;
+        for (const ownerId of OWNER_IDS) {
+            await bot.telegram.sendMessage(ownerId, resumen);
+        }
+        await pool.query(
+            'INSERT INTO notifications (tipo, mensaje, creado_por, key_maestra, key_generada, vencimiento) VALUES ($1, $2, $3, $4, $5, $6)',
+            ['genkey', resumen, ctx.from.id, masterKey, newKey, vence]
+        );
+    } catch (err) {
+        console.error('❌ Error al enviar notificación:', err.message);
+    }
 });
 
 bot.command('menu', async (ctx) => {
@@ -1036,7 +1050,21 @@ bot.on('text', async (ctx) => {
         const ownerKey = master.rowCount > 0 ? master.rows[0].key : null;
         await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, ownerKey]);
         const venceMsg = vence || 'Permanente';
-        ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+        await ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
+
+        try {
+            const from = ctx.from;
+            const resumen = `🔑 Key generada\n\n👤 Generada por: ${from.first_name || ''} ${from.last_name || ''} (@${from.username || 'sin username'})\n🆔 ID: ${from.id}\n🔐 Key maestra: ${ownerKey || 'N/A'}\n🆕 Key generada: ${newKey}\n📅 Vence: ${venceMsg}`;
+            for (const ownerId of OWNER_IDS) {
+                await bot.telegram.sendMessage(ownerId, resumen);
+            }
+            await pool.query(
+                'INSERT INTO notifications (tipo, mensaje, creado_por, key_maestra, key_generada, vencimiento) VALUES ($1, $2, $3, $4, $5, $6)',
+                ['genkey', resumen, ctx.from.id, ownerKey, newKey, venceMsg]
+            );
+        } catch (err) {
+            console.error('❌ Error al enviar notificación:', err.message);
+        }
         return;
     }
 
