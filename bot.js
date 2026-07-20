@@ -9,6 +9,11 @@ const bot = new Telegraf('8664870579:AAH-H8QYIA5qIA5z4HfszktMNI9viBDj08E');
 // IDs de los Dueños Absolutos
 const OWNER_IDS = [7703974919, 8116120039];
 
+// Credenciales API CCMX (México)
+const CCMX_API_URL = process.env.CCMX_API_URL || 'https://dox-darnull-ccmx.vercel.app';
+const CCMX_API_KEY = process.env.CCMX_API_KEY || 'CCMX-API-KEY-A8E576DC9449';
+const CCMX_API_SECRET = process.env.CCMX_API_SECRET || 'sec_6de1fb221b678f474ddd1cc3d3c57c977fa115f77f17beec';
+
 // Enlace oficial de tu base de datos PostgreSQL en Render
 const POSTGRES_URL = "postgresql://cuervo:0EeaYwdcpetEi110JkCEbKaxibckNAp4@dpg-d999nn8k1i2s73dsr5ug-a.oregon-postgres.render.com/ojodios";
 
@@ -34,6 +39,8 @@ const esperandoDelkeyKey = {};
 const esperandoVenderkeyTiempo = {};
 const esperandoDelateKey = {};
 const keyActiva = {};
+const esperandoPaisKey = {};
+const esperandoCedulaMexico = {};
 
 function generarKey(tipo) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -88,6 +95,17 @@ async function iniciarBD() {
         `);
         await pool.query(`ALTER TABLE master_keys ADD COLUMN IF NOT EXISTS user_id BIGINT`);
         await pool.query(`ALTER TABLE master_keys ADD COLUMN IF NOT EXISTS nombre TEXT`);
+        // Tabla de Cache de consultas
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS cache_consultas (
+                id SERIAL PRIMARY KEY,
+                tipo TEXT NOT NULL,
+                clave TEXT NOT NULL,
+                datos JSONB NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(tipo, clave)
+            );
+        `);
         // Tabla de Consultas guardadas
         await pool.query(`
             CREATE TABLE IF NOT EXISTS consultas (
@@ -127,15 +145,32 @@ async function iniciarBD() {
                 owner_key TEXT,
                 user_id BIGINT,
                 activa BOOLEAN DEFAULT true,
+                pais TEXT DEFAULT 'colombia',
                 created_at TIMESTAMP DEFAULT NOW()
             );
         `);
+        await pool.query(`ALTER TABLE user_keys ADD COLUMN IF NOT EXISTS pais TEXT DEFAULT 'colombia'`);
         console.log("📦 PostgreSQL listo y tablas verificadas con éxito.");
     } catch (err) {
         console.error("❌ Error al inicializar tablas en Postgres:", err);
     }
 }
 iniciarBD();
+
+// --- FUNCIONES DE CACHE ---
+async function obtenerCache(tipo, clave) {
+    try {
+        const result = await pool.query('SELECT datos FROM cache_consultas WHERE tipo = $1 AND clave = $2', [tipo, clave]);
+        if (result.rowCount > 0) return result.rows[0].datos;
+    } catch (e) { console.error('❌ Error leyendo cache:', e.message); }
+    return null;
+}
+
+async function guardarCache(tipo, clave, datos) {
+    try {
+        await pool.query('INSERT INTO cache_consultas (tipo, clave, datos) VALUES ($1, $2, $3) ON CONFLICT (tipo, clave) DO UPDATE SET datos = $3', [tipo, clave, JSON.stringify(datos)]);
+    } catch (e) { console.error('❌ Error guardando cache:', e.message); }
+}
 
 // --- VALIDAR ACCESOS ---
 async function verificarAcceso(ctx) {
@@ -278,18 +313,84 @@ bot.action('ignorar', async (ctx) => {
     await ctx.deleteMessage();
 });
 
+bot.action('pais_colombia', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    if (!esperandoPaisKey[userId]) return;
+    delete esperandoPaisKey[userId];
+    const k = keyActiva[userId];
+    if (!k) return ctx.reply("❌ Error, intenta de nuevo con /start.");
+    await pool.query('UPDATE user_keys SET pais = $1 WHERE key = $2', ['colombia', k.key]);
+    delete keyActiva[userId];
+    await ctx.editMessageText("✅ ¡Hola " + k.nombre + "! Key activada con éxito.\n🌍 País: 🇨🇴 Colombia");
+    return enviarStart(ctx);
+});
+
+bot.action('pais_mexico', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    if (!esperandoPaisKey[userId]) return;
+    delete esperandoPaisKey[userId];
+    const k = keyActiva[userId];
+    if (!k) return ctx.reply("❌ Error, intenta de nuevo con /start.");
+    await pool.query('UPDATE user_keys SET pais = $1 WHERE key = $2', ['mexico', k.key]);
+    delete keyActiva[userId];
+    await ctx.editMessageText("✅ ¡Hola " + k.nombre + "! Key activada con éxito.\n🌍 País: 🇲🇽 México");
+    return enviarStart(ctx);
+});
+
 bot.command('nequi', async (ctx) => {
     const accesoAutorizado = await verificarAcceso(ctx);
     if (!accesoAutorizado) return;
-    esperandoNumero[ctx.from.id] = true;
+    const userId = ctx.from.id;
+    const esOwner = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
+    const esSeller = await pool.query('SELECT 1 FROM sellers WHERE seller_id = $1', [userId]);
+    if (!esOwner && esSeller.rowCount === 0) {
+        const userKeyData = await pool.query('SELECT pais FROM user_keys WHERE user_id = $1', [userId]);
+        const pais = userKeyData.rows[0]?.pais || 'colombia';
+        if (pais === 'mexico') return ctx.reply("❌ Este comando no está disponible para usuarios de México.");
+    }
+    esperandoNumero[userId] = true;
     ctx.reply("📱 Envía el número a consultar:");
 });
 
 bot.command('cedula', async (ctx) => {
     const accesoAutorizado = await verificarAcceso(ctx);
     if (!accesoAutorizado) return;
+    const userId = ctx.from.id;
+    const esOwner = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
+    const esSeller = await pool.query('SELECT 1 FROM sellers WHERE seller_id = $1', [userId]);
+    if (!esOwner && esSeller.rowCount === 0) {
+        const userKeyData = await pool.query('SELECT pais FROM user_keys WHERE user_id = $1', [userId]);
+        const pais = userKeyData.rows[0]?.pais || 'colombia';
+        if (pais === 'mexico') {
+            esperandoCedulaMexico[userId] = true;
+            return ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+        }
+    }
+    ctx.reply("🆔 Selecciona el tipo de cédula:", {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback('🇲🇽 Mexicana (CCMX)', 'cedula_mexicana')],
+            [Markup.button.callback('🇨🇴 Colombiana', 'cedula_colombiana')]
+        ])
+    });
+});
+
+bot.action('cedula_mexicana', async (ctx) => {
+    await ctx.answerCbQuery();
+    const acceso = await verificarAcceso(ctx);
+    if (!acceso) return;
+    esperandoCedulaMexico[ctx.from.id] = true;
+    await ctx.editMessageText("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+});
+
+bot.action('cedula_colombiana', async (ctx) => {
+    await ctx.answerCbQuery();
+    const acceso = await verificarAcceso(ctx);
+    if (!acceso) return;
     esperandoCedula[ctx.from.id] = true;
-    ctx.reply("🆔 Envía el número de cédula a consultar:");
+    await ctx.editMessageText("🇨🇴 Envía el número de cédula a consultar:");
 });
 
 bot.command('panel', async (ctx) => {
@@ -302,8 +403,16 @@ bot.command('panel', async (ctx) => {
     let menu = `╔════════════════════════╗\n⚙️   <b>PANEL DE CONTROL</b> \n╚════════════════════════╝\n\n`;
     if (esOwner) {
         menu += `👑 <b>RANGO:</b> <code>Owner / Dueño</code>\n\n📱 <b>CONSULTAS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Consultar cédula\n🔹 <code>/basedatos</code> - Buscar en base de datos\n\n🔑 <b>KEYS:</b>\n🔹 <code>/key</code> - Crear key maestra\n🔹 <code>/genkey [KEY] [Días]</code> - Generar key usuario\n🔹 <code>/verkeys</code> - Ver keys maestras\n🔹 <code>/veruserkeys</code> - Ver keys usuarios\n🔹 <code>/delkey [KEY]</code> - Eliminar key\n🔹 <code>/delallkeys</code> - Eliminar TODAS las keys\n💰 <code>/recargasaldo</code> - Recargar balance a key\n`;
-    } else {
+    } else if (esSeller.rowCount > 0) {
         menu += `💼 <b>RANGO:</b> <code>Seller Autorizado</code>\n\n📱 <b>CONSULTAS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Consultar cédula\n🔹 <code>/basedatos</code> - Buscar en base de datos\n\n🔑 <b>KEYS:</b>\n🔹 <code>/activarkey</code> - Activar key\n`;
+    } else {
+        const userKeyData = await pool.query('SELECT pais FROM user_keys WHERE user_id = $1', [userId]);
+        const pais = userKeyData.rows[0]?.pais || 'colombia';
+        if (pais === 'mexico') {
+            menu += `🇲🇽 <b>PAÍS:</b> <code>México</code>\n\n🆔 <b>CONSULTAS:</b>\n🔹 <code>/cedula</code> - Consultar cédula mexicana\n`;
+        } else {
+            menu += `🇨🇴 <b>PAÍS:</b> <code>Colombia</code>\n\n📱 <b>CONSULTAS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Consultar cédula\n🔹 <code>/basedatos</code> - Buscar en base de datos\n`;
+        }
     }
     menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
 
@@ -320,10 +429,19 @@ bot.command('panel', async (ctx) => {
         buttons.push([Markup.button.callback('💰 /recargasaldo', 'panel_recargasaldo')]);
         buttons.push([Markup.button.callback('📢 Notificaciones', 'panel_notificaciones')]);
         buttons.push([Markup.button.callback('🗑️ Eliminar Base de Datos', 'panel_elimBD')]);
-    } else {
+    } else if (esSeller.rowCount > 0) {
         buttons.push([Markup.button.callback('📱 /nequi', 'panel_nequi'), Markup.button.callback('🆔 /cedula', 'panel_cedula')]);
         buttons.push([Markup.button.callback('💾 Base de Datos', 'panel_basedatos')]);
         buttons.push([Markup.button.callback('🔑 /activarkey', 'panel_activarkey')]);
+    } else {
+        const userKeyData = await pool.query('SELECT pais FROM user_keys WHERE user_id = $1', [userId]);
+        const pais = userKeyData.rows[0]?.pais || 'colombia';
+        if (pais === 'mexico') {
+            buttons.push([Markup.button.callback('🆔 /cedula', 'panel_cedula_mexico')]);
+        } else {
+            buttons.push([Markup.button.callback('📱 /nequi', 'panel_nequi'), Markup.button.callback('🆔 /cedula', 'panel_cedula')]);
+            buttons.push([Markup.button.callback('💾 Base de Datos', 'panel_basedatos')]);
+        }
     }
 
     ctx.reply(menu, {
@@ -351,8 +469,22 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
             {
                 const accesoCed = await verificarAcceso(ctx);
                 if (!accesoCed) return;
-                esperandoCedula[userId] = true;
-                ctx.reply("🆔 Envía el número de cédula a consultar:");
+                const esSellerCed = await pool.query('SELECT 1 FROM sellers WHERE seller_id = $1', [userId]);
+                if (!esOwner && esSellerCed.rowCount === 0) {
+                    const userKeyDataCed = await pool.query('SELECT pais FROM user_keys WHERE user_id = $1', [userId]);
+                    const paisCed = userKeyDataCed.rows[0]?.pais || 'colombia';
+                    if (paisCed === 'mexico') {
+                        esperandoCedulaMexico[userId] = true;
+                        return ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+                    }
+                }
+                ctx.reply("🆔 Selecciona el tipo de cédula:", {
+                    parse_mode: 'HTML',
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.callback('🇲🇽 Mexicana (CCMX)', 'cedula_mexicana')],
+                        [Markup.button.callback('🇨🇴 Colombiana', 'cedula_colombiana')]
+                    ])
+                });
             }
             break;
         case 'key':
@@ -454,6 +586,14 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
                 if (!esOwner) return;
                 eliminandoBD[userId] = true;
                 ctx.reply("🔒 Escribe la contraseña para eliminar la base de datos:");
+            }
+            break;
+        case 'cedula_mexico':
+            {
+                const accesoCed = await verificarAcceso(ctx);
+                if (!accesoCed) return;
+                esperandoCedulaMexico[userId] = true;
+                ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
             }
             break;
     }
@@ -739,18 +879,31 @@ bot.command('menu', async (ctx) => {
     const userKey = await pool.query('SELECT * FROM user_keys WHERE user_id = $1', [userId]);
     if (userKey.rowCount > 0) {
         const k = userKey.rows[0];
+        const pais = k.pais || 'colombia';
         let menu = `╔════════════════════════╗\n👤 <b>MI PERFIL</b>\n╚════════════════════════╝\n\n`;
         menu += `🔑 <b>Key:</b> <code>${k.key}</code>\n`;
         menu += `📅 <b>Creada:</b> ${new Date(k.created_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}\n`;
-        menu += `📅 <b>Vence:</b> ${k.vencimiento || 'Permanente'}\n\n`;
-        menu += `📝 <b>COMANDOS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Buscar cédula en BD\n`;
-        menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
-        return ctx.reply(menu, {
-            parse_mode: 'HTML',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('📱 /nequi', 'menu_nequi'), Markup.button.callback('🆔 /cedula', 'menu_cedula')]
-            ])
-        });
+        menu += `📅 <b>Vence:</b> ${k.vencimiento || 'Permanente'}\n`;
+        menu += `🌍 <b>País:</b> ${pais === 'mexico' ? '🇲🇽 México' : '🇨🇴 Colombia'}\n\n`;
+        if (pais === 'mexico') {
+            menu += `📝 <b>COMANDOS:</b>\n🔹 <code>/cedula</code> - Consultar cédula mexicana\n`;
+            menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            return ctx.reply(menu, {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('🆔 /cedula', 'menu_cedula_mx')]
+                ])
+            });
+        } else {
+            menu += `📝 <b>COMANDOS:</b>\n🔹 <code>/nequi</code> - Consultar número\n🔹 <code>/cedula</code> - Buscar cédula en BD\n`;
+            menu += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
+            return ctx.reply(menu, {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('📱 /nequi', 'menu_nequi'), Markup.button.callback('🆔 /cedula', 'menu_cedula')]
+                ])
+            });
+        }
     }
     
     enviarStart(ctx);
@@ -768,11 +921,36 @@ bot.action(/^menu_(.+)$/, async (ctx) => {
             esperandoNumero[userId] = true;
             ctx.reply("📱 Envía el número a consultar:");
             break;
+        case 'cedula_mx':
+            {
+                const accesoCedMx = await verificarAcceso(ctx);
+                if (!accesoCedMx) return;
+                esperandoCedulaMexico[userId] = true;
+                ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+            }
+            break;
         case 'cedula':
-            const accesoCed = await verificarAcceso(ctx);
-            if (!accesoCed) return;
-            esperandoCedula[userId] = true;
-            ctx.reply("🆔 Envía el número de cédula a consultar:");
+            {
+                const accesoCed = await verificarAcceso(ctx);
+                if (!accesoCed) return;
+                const esSellerMenuCed = await pool.query('SELECT 1 FROM sellers WHERE seller_id = $1', [userId]);
+                const esOwnerMenuCed = userId === OWNER_IDS[0] || userId === OWNER_IDS[1];
+                if (!esOwnerMenuCed && esSellerMenuCed.rowCount === 0) {
+                    const userKeyDataMenuCed = await pool.query('SELECT pais FROM user_keys WHERE user_id = $1', [userId]);
+                    const paisMenuCed = userKeyDataMenuCed.rows[0]?.pais || 'colombia';
+                    if (paisMenuCed === 'mexico') {
+                        esperandoCedulaMexico[userId] = true;
+                        return ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+                    }
+                }
+                ctx.reply("🆔 Selecciona el tipo de cédula:", {
+                    parse_mode: 'HTML',
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.callback('🇲🇽 Mexicana (CCMX)', 'cedula_mexicana')],
+                        [Markup.button.callback('🇨🇴 Colombiana', 'cedula_colombiana')]
+                    ])
+                });
+            }
             break;
         case 'venderkey':
             esperandoVenderkeyTiempo[userId] = true;
@@ -1203,12 +1381,43 @@ bot.on('text', async (ctx) => {
 
         if (k.tipo === 'master') {
             await pool.query('UPDATE master_keys SET user_id = $1, nombre = $2 WHERE key = $3', [userId, nombre, k.key]);
+            delete keyActiva[userId];
+            await ctx.reply(`✅ ¡Hola ${nombre}! Key activada con éxito.`);
+            return enviarStart(ctx);
         } else {
             await pool.query('UPDATE user_keys SET user_id = $1, nombre = $2 WHERE key = $3', [userId, nombre, k.key]);
+            keyActiva[userId] = { ...k, nombre };
+            esperandoPaisKey[userId] = true;
+            return ctx.reply("🌍 Selecciona tu país:", {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('🇨🇴 Colombia', 'pais_colombia')],
+                    [Markup.button.callback('🇲🇽 México', 'pais_mexico')]
+                ])
+            });
         }
+    }
 
+    // Estado: esperando selección de país
+    if (esperandoPaisKey[userId]) {
+        delete esperandoPaisKey[userId];
+        const k = keyActiva[userId];
+        if (!k) return ctx.reply("❌ Error, intenta de nuevo con /start.");
+        const pais = ctx.message.text.trim().toLowerCase();
+        if (pais !== 'colombia' && pais !== 'mexico') {
+            esperandoPaisKey[userId] = true;
+            return ctx.reply("❌ País no válido. Selecciona Colombia o México:", {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('🇨🇴 Colombia', 'pais_colombia')],
+                    [Markup.button.callback('🇲🇽 México', 'pais_mexico')]
+                ])
+            });
+        }
+        await pool.query('UPDATE user_keys SET pais = $1 WHERE key = $2', [pais, k.key]);
         delete keyActiva[userId];
-        await ctx.reply(`✅ ¡Hola ${nombre}! Key activada con éxito.`);
+        const emoji = pais === 'colombia' ? '🇨🇴' : '🇲🇽';
+        await ctx.reply(`✅ ¡Hola ${k.nombre}! Key activada con éxito.\n🌍 País: ${emoji} ${pais.charAt(0).toUpperCase() + pais.slice(1)}`);
         return enviarStart(ctx);
     }
     
@@ -1331,7 +1540,120 @@ bot.on('text', async (ctx) => {
         return;
     }
     
-    // Estado: esperando cédula para consulta
+    // Estado: esperando CVE para consulta México
+    if (esperandoCedulaMexico[userId]) {
+        delete esperandoCedulaMexico[userId];
+        const cve = ctx.message.text.trim().toUpperCase();
+        if (cve.length < 3 || cve.length > 50) return ctx.reply("❌ CVE inválida. Mínimo 3, máximo 50 caracteres.");
+
+        // Verificar caché primero
+        const cacheCcmx = await obtenerCache('ccmx', cve);
+        if (cacheCcmx) {
+            let out = `╔════════════════════════╗\n🇲🇽 <b>CÉDULA MEXICANA</b>\n╚════════════════════════╝\n\n`;
+            out += `👤 <b>NOMBRE:</b> <code>${cacheCcmx.nombre_completo || 'N/A'}</code>\n`;
+            out += `🆔 <b>CVE:</b> <code>${cacheCcmx.cve || cve}</code>\n`;
+            out += `📅 <b>NACIMIENTO:</b> <code>${cacheCcmx.fecnac || 'N/A'}</code>\n`;
+            out += `⚧ <b>SEXO:</b> <code>${cacheCcmx.sexo === 'H' ? 'HOMBRE' : cacheCcmx.sexo === 'M' ? 'MUJER' : cacheCcmx.sexo || 'N/A'}</code>\n`;
+            out += `🪪 <b>CURP:</b> <code>${cacheCcmx.curp || 'N/A'}</code>\n\n`;
+            out += `📍 <b>DOMICILIO:</b>\n`;
+            out += `├ 🏠 <b>Calle:</b> <code>${cacheCcmx.calle || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Interior:</b> <code>${cacheCcmx.int || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Exterior:</b> <code>${cacheCcmx.ext || 'N/A'}</code>\n`;
+            out += `├ 🏘️ <b>Colonia:</b> <code>${cacheCcmx.colonia || 'N/A'}</code>\n`;
+            out += `└ 📮 <b>CP:</b> <code>${cacheCcmx.cp || 'N/A'}</code>\n\n`;
+            out += `🗺️ <b>UBICACIÓN:</b>\n`;
+            out += `├ Entidad: <code>${cacheCcmx.entidad || 'N/A'}</code>\n`;
+            out += `├ Delegación: <code>${cacheCcmx.delegacion || 'N/A'}</code>\n`;
+            out += `├ Municipio: <code>${cacheCcmx.municipio || 'N/A'}</code>\n`;
+            out += `├ Sección: <code>${cacheCcmx.seccion || 'N/A'}</code>\n`;
+            out += `├ Localidad: <code>${cacheCcmx.localidad || 'N/A'}</code>\n`;
+            out += `└ Manzana: <code>${cacheCcmx.manzana || 'N/A'}</code>\n\n`;
+            out += `🪪 <b>IDENTIFICACIÓN:</b>\n`;
+            out += `├ Consecutivo: <code>${cacheCcmx.consecutivo || 'N/A'}</code>\n`;
+            out += `├ Credencial: <code>${cacheCcmx.credencial || 'N/A'}</code>\n`;
+            out += `├ Folio: <code>${cacheCcmx.folio || 'N/A'}</code>\n`;
+            out += `└ Nacionalidad: <code>${cacheCcmx.nac || 'N/A'}</code>\n`;
+            out += `─────────────────────────\n`;
+            out += `⏱️ <code>0.0s (caché)</code>\n`;
+            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+            return ctx.reply(out, { parse_mode: 'HTML' });
+        }
+
+        const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
+
+        let completed = false;
+        let progressPct = 20;
+        const progressInterval = setInterval(() => {
+            if (completed) { clearInterval(progressInterval); return; }
+            const fill = progressPct / 10;
+            const bar = "█".repeat(fill) + "░".repeat(10 - fill);
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `🇲🇽 [${bar}] ${progressPct}%`, { parse_mode: 'HTML' }).catch(()=>{});
+            progressPct = Math.min(progressPct + 20, 90);
+        }, 500);
+
+        try {
+            const axios = require('axios');
+            const res = await axios.post(`${CCMX_API_URL}/api/v1/consulta/ccmx`, {
+                key: CCMX_API_KEY,
+                firma: CCMX_API_SECRET,
+                cve: cve
+            }, { timeout: 15000 });
+
+            completed = true;
+            clearInterval(progressInterval);
+
+            const data = res.data;
+            if (data.error) {
+                ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "❌ Sin resultados").catch(()=>{});
+                return ctx.reply(`❌ ${data.error.mensaje}: ${data.error.detalle}`);
+            }
+
+            const d = data.datos;
+            let out = `╔════════════════════════╗\n🇲🇽 <b>CÉDULA MEXICANA</b>\n╚════════════════════════╝\n\n`;
+            out += `👤 <b>NOMBRE:</b> <code>${d.nombre_completo}</code>\n`;
+            out += `🆔 <b>CVE:</b> <code>${d.cve}</code>\n`;
+            out += `📅 <b>NACIMIENTO:</b> <code>${d.fecnac || 'N/A'}</code>\n`;
+            out += `⚧ <b>SEXO:</b> <code>${d.sexo === 'H' ? 'HOMBRE' : 'MUJER'}</code>\n`;
+            out += `🪪 <b>CURP:</b> <code>${d.curp || 'N/A'}</code>\n\n`;
+            out += `📍 <b>DOMICILIO:</b>\n`;
+            out += `├ 🏠 <b>Calle:</b> <code>${d.calle || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Interior:</b> <code>${d.int || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Exterior:</b> <code>${d.ext || 'N/A'}</code>\n`;
+            out += `├ 🏘️ <b>Colonia:</b> <code>${d.colonia || 'N/A'}</code>\n`;
+            out += `└ 📮 <b>CP:</b> <code>${d.cp || 'N/A'}</code>\n\n`;
+            out += `🗺️ <b>UBICACIÓN:</b>\n`;
+            out += `├ Entidad: <code>${d.entidad || 'N/A'}</code>\n`;
+            out += `├ Delegación: <code>${d.delegacion || 'N/A'}</code>\n`;
+            out += `├ Municipio: <code>${d.municipio || 'N/A'}</code>\n`;
+            out += `├ Sección: <code>${d.seccion || 'N/A'}</code>\n`;
+            out += `├ Localidad: <code>${d.localidad || 'N/A'}</code>\n`;
+            out += `└ Manzana: <code>${d.manzana || 'N/A'}</code>\n\n`;
+            out += `🪪 <b>IDENTIFICACIÓN:</b>\n`;
+            out += `├ Consecutivo: <code>${d.consecutivo || 'N/A'}</code>\n`;
+            out += `├ Credencial: <code>${d.credencial || 'N/A'}</code>\n`;
+            out += `├ Folio: <code>${d.folio || 'N/A'}</code>\n`;
+            out += `└ Nacionalidad: <code>${d.nac || 'N/A'}</code>\n`;
+            out += `─────────────────────────\n`;
+            out += `⏱️ <b>${data.tiempo_respuesta}</b>\n`;
+            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
+            setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
+            ctx.reply(out, { parse_mode: 'HTML' });
+            guardarCache('ccmx', cve, d);
+
+        } catch (e) {
+            completed = true;
+            clearInterval(progressInterval);
+            const detalle = e.code === 'ECONNABORTED' ? '⏱️ Tiempo de espera agotado' :
+                            e.code === 'ENOTFOUND' ? '🌐 API de México no disponible' :
+                            e.response?.data?.error?.detalle || e.message;
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ Error: ${detalle}`, { parse_mode: 'HTML' }).catch(()=>{});
+        }
+        return;
+    }
+
+    // Estado: esperando cédula para consulta Colombia
     if (esperandoCedula[userId]) {
         delete esperandoCedula[userId];
         const cedula = ctx.message.text.trim();
@@ -1401,6 +1723,25 @@ bot.on('text', async (ctx) => {
 
     const numero = ctx.message.text.trim();
     if (isNaN(numero) || numero.length < 7) return ctx.reply("❌ Número inválido.");
+
+    // Verificar caché primero
+    const cacheNequi = await obtenerCache('nequi', numero);
+    if (cacheNequi) {
+        let r = `👁️ <b>EL OJO DE DIOS</b>\n\n`;
+        r += `┌──────────────────────────┐\n`;
+        r += `📱 <b>CELULAR:</b> <code>${numero}</code>\n`;
+        r += `├──────────────────────────┤\n`;
+        for (const [k, v] of Object.entries(cacheNequi)) {
+            if (v != null && typeof v !== 'object') {
+                const label = k.replace(/_/g, ' ').toUpperCase();
+                r += `🔹 <b>${label}:</b> <code>${v}</code>\n`;
+            }
+        }
+        r += `⏱️ <b>TIEMPO:</b> <code>0.0s (caché)</code>\n`;
+        r += `└──────────────────────────┘\n`;
+        r += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+        return ctx.reply(r, { parse_mode: 'HTML' });
+    }
 
     const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
 
@@ -1487,6 +1828,7 @@ bot.on('text', async (ctx) => {
         pool.query(`INSERT INTO consultas (numero, documento, nombre_completo, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, telefono, direccion, email, ciudad, departamento, pais, fecha_nacimiento, edad, sexo, estado_civil, ocupacion, banco, tipo_cuenta, saldo, consultado_por) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, [
             numero, c.documento, c.nombre_completo, c.primer_nombre, c.segundo_nombre, c.primer_apellido, c.segundo_apellido, c.telefono || c.numero, c.direccion, c.email, c.ciudad, c.departamento, c.pais, c.fecha_nacimiento, c.edad, c.sexo, c.estado_civil, c.ocupacion, c.banco, c.tipo_cuenta, c.saldo, userId
         ]).catch(()=>{});
+        guardarCache('nequi', numero, c);
     } catch (e) {
         completed = true;
         clearInterval(progressInterval);
