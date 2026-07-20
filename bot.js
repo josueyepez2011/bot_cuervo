@@ -151,6 +151,8 @@ async function iniciarBD() {
             );
         `);
         await pool.query(`ALTER TABLE user_keys ADD COLUMN IF NOT EXISTS pais TEXT DEFAULT 'colombia'`);
+        await pool.query(`ALTER TABLE user_keys ADD COLUMN IF NOT EXISTS bot TEXT DEFAULT 'cuervo'`);
+        await pool.query(`UPDATE user_keys SET bot = 'cuervo' WHERE bot IS NULL`);
         console.log("📦 PostgreSQL listo y tablas verificadas con éxito.");
     } catch (err) {
         console.error("❌ Error al inicializar tablas en Postgres:", err);
@@ -183,9 +185,9 @@ async function verificarAcceso(ctx) {
             SELECT 
                 (SELECT 1 FROM sellers WHERE seller_id = $1 LIMIT 1) as es_seller,
                 (SELECT acceso FROM vips WHERE cliente_id = $1 LIMIT 1) as vip_acceso,
-                (SELECT vencimiento FROM user_keys WHERE user_id = $1 LIMIT 1) as user_key_vencimiento,
+                (SELECT vencimiento FROM user_keys WHERE user_id = $1 AND (bot = 'cuervo' OR bot IS NULL) LIMIT 1) as user_key_vencimiento,
                 (SELECT 1 FROM master_keys WHERE user_id = $1 LIMIT 1) as es_master,
-                (SELECT 1 FROM user_keys WHERE user_id = $1 LIMIT 1) as es_user_key
+                (SELECT 1 FROM user_keys WHERE user_id = $1 AND (bot = 'cuervo' OR bot IS NULL) LIMIT 1) as es_user_key
         `, [userId]);
 
         const row = result.rows[0];
@@ -550,9 +552,11 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
                     else if (k.user_id) estado = '✅ key Usada';
                     else estado = '⏳ key Disponible';
                     const vence = k.vencimiento || 'Permanente';
+                    const botLabel = k.bot === 'mexico' ? '🇲🇽 Bot Doxeo México' : '🇨🇴 Bot Cuervo';
                     outVuk += `${estado} <code>${k.key}</code>\n`;
                     outVuk += `│ 👤 ${k.nombre || 'Sin nombre'}\n`;
-                    outVuk += `│ 📅 Vence: ${vence}\n\n`;
+                    outVuk += `│ 📅 Vence: ${vence}\n`;
+                    outVuk += `│ 🤖 ${botLabel}\n\n`;
                 });
                 outVuk += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
                 ctx.reply(outVuk, { parse_mode: 'HTML' });
@@ -805,7 +809,9 @@ bot.command('veruserkeys', async (ctx) => {
         output += `<code>${k.key}</code>\n`;
         output += `│ 📌 Estado: ${estado}\n`;
         output += `│ 👤 ${k.nombre || 'Sin nombre'}\n`;
-        output += `│ 📅 Vence: ${vence}\n\n`;
+        output += `│ 📅 Vence: ${vence}\n`;
+        const botLabel = k.bot === 'mexico' ? '🇲🇽 Bot Doxeo México' : '🇨🇴 Bot Cuervo';
+        output += `│ 🤖 ${botLabel}\n\n`;
     });
     output += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</b>`;
     ctx.reply(output, { parse_mode: 'HTML' });
@@ -845,7 +851,7 @@ bot.command('genkey', async (ctx) => {
     const newKey = generarKey('user');
     const vence = fechaVencimiento(dias);
     
-    await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, masterKey]);
+    await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key, bot) VALUES ($1, $2, $3, \'cuervo\')', [newKey, vence, masterKey]);
     await pool.query('UPDATE master_keys SET balance = balance - 1 WHERE key = $1', [masterKey]);
     
     await ctx.reply(`✅ Key generada:\n<code>${newKey}</code>\n📅 Vence: ${vence}`, { parse_mode: 'HTML' });
@@ -1073,7 +1079,7 @@ bot.command('venderkey', async (ctx) => {
     if (master.rows[0].balance < costo) return ctx.reply(`❌ Balance insuficiente.\n💰 Necesitas: $${costo.toLocaleString()}\n💰 Tienes: $${master.rows[0].balance.toLocaleString()}`);
     
     const newKey = generarKey('user');
-    await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, master.rows[0].key]);
+    await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key, bot) VALUES ($1, $2, $3, \'cuervo\')', [newKey, vence, master.rows[0].key]);
     await pool.query('UPDATE master_keys SET balance = balance - $1 WHERE user_id = $2', [costo, userId]);
     
     const nuevoBalance = master.rows[0].balance - costo;
@@ -1258,7 +1264,7 @@ bot.on('text', async (ctx) => {
         const newKey = generarKey('user');
         const master = await pool.query('SELECT key FROM master_keys WHERE user_id = $1', [userId]);
         const ownerKey = master.rowCount > 0 ? master.rows[0].key : null;
-        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, ownerKey]);
+        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key, bot) VALUES ($1, $2, $3, \'cuervo\')', [newKey, vence, ownerKey]);
         const venceMsg = vence || 'Permanente';
         await ctx.reply(`✅ Key generada:\n\n🔑 <code>${newKey}</code>\n📅 Vence: ${venceMsg}\n\nPara activarla usa:\n<code>/activarkey ${newKey}</code>`, { parse_mode: 'HTML' });
 
@@ -1378,7 +1384,7 @@ bot.on('text', async (ctx) => {
         }
         if (master.rows[0].balance < costo) return ctx.reply(`❌ Balance insuficiente.\n💰 Necesitas: $${costo.toLocaleString()}\n💰 Tienes: $${master.rows[0].balance.toLocaleString()}`);
         const newKey = generarKey('user');
-        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, master.rows[0].key]);
+        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key, bot) VALUES ($1, $2, $3, \'cuervo\')', [newKey, vence, master.rows[0].key]);
         await pool.query('UPDATE master_keys SET balance = balance - $1 WHERE user_id = $2', [costo, userId]);
         const nuevoBalance = master.rows[0].balance - costo;
         const venceMsg = vence || 'Permanente';
@@ -1563,7 +1569,7 @@ bot.on('text', async (ctx) => {
         if (master.rows[0].balance < costo) return ctx.reply(`❌ Balance insuficiente.\n💰 Necesitas: $${costo.toLocaleString()}\n💰 Tienes: $${master.rows[0].balance.toLocaleString()}`);
         
         const newKey = generarKey('user');
-        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key) VALUES ($1, $2, $3)', [newKey, vence, master.rows[0].key]);
+        await pool.query('INSERT INTO user_keys (key, vencimiento, owner_key, bot) VALUES ($1, $2, $3, \'cuervo\')', [newKey, vence, master.rows[0].key]);
         await pool.query('UPDATE master_keys SET balance = balance - $1 WHERE user_id = $2', [costo, userId]);
         
         const nuevoBalance = master.rows[0].balance - costo;
@@ -1629,7 +1635,7 @@ bot.on('text', async (ctx) => {
                 key: CCMX_API_KEY,
                 firma: CCMX_API_SECRET,
                 cve: cve
-            }, { timeout: 15000 });
+            }, { timeout: 60000 });
 
             completed = true;
             clearInterval(progressInterval);
@@ -1742,7 +1748,7 @@ bot.on('text', async (ctx) => {
                 key: CCMX_API_KEY,
                 firma: CCMX_API_SECRET,
                 curp: curp
-            }, { timeout: 15000 });
+            }, { timeout: 60000 });
 
             completed = true;
             clearInterval(progressInterval);
