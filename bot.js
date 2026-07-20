@@ -1607,7 +1607,7 @@ bot.on('text', async (ctx) => {
             out += `└ Nacionalidad: <code>${cacheCcmx.nac || 'N/A'}</code>\n`;
             out += `─────────────────────────\n`;
             out += `⏱️ <code>0.0s (caché)</code>\n`;
-            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+            out += `✨ <i>@DarkNull1 @Knousee</i>`;
             return ctx.reply(out, { parse_mode: 'HTML' });
         }
 
@@ -1667,7 +1667,7 @@ bot.on('text', async (ctx) => {
             out += `└ Nacionalidad: <code>${d.nac || 'N/A'}</code>\n`;
             out += `─────────────────────────\n`;
             out += `⏱️ <b>${data.tiempo_respuesta}</b>\n`;
-            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+            out += `✨ <i>@DarkNull1 @Knousee</i>`;
 
             ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
             setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
@@ -1720,7 +1720,7 @@ bot.on('text', async (ctx) => {
             out += `└ Nacionalidad: <code>${cacheCurp.nac || 'N/A'}</code>\n`;
             out += `─────────────────────────\n`;
             out += `⏱️ <code>0.0s (caché)</code>\n`;
-            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+            out += `✨ <i>@DarkNull1 @Knousee</i>`;
             return ctx.reply(out, { parse_mode: 'HTML' });
         }
 
@@ -1780,7 +1780,7 @@ bot.on('text', async (ctx) => {
             out += `└ Nacionalidad: <code>${d.nac || 'N/A'}</code>\n`;
             out += `─────────────────────────\n`;
             out += `⏱️ <b>${data.tiempo_respuesta}</b>\n`;
-            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+            out += `✨ <i>@DarkNull1 @Knousee</i>`;
 
             ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
             setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
