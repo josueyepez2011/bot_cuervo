@@ -1659,6 +1659,28 @@ bot.on('text', async (ctx) => {
         const cedula = ctx.message.text.trim();
         if (isNaN(cedula) || cedula.length < 5) return ctx.reply("❌ Cédula inválida.");
 
+        // Verificar caché primero
+        const cacheCed = await obtenerCache('cedula_co', cedula);
+        if (cacheCed) {
+            let out = `╔════════════════════════╗\n💾 <b>CÉDULA</b>\n╚════════════════════════╝\n\n`;
+            out += `🔍 <b>Búsqueda:</b> <code>${cedula}</code>\n`;
+            out += `⏱️ <code>0.0s (caché)</code>\n\n`;
+            out += `┌──────────────────────────┐\n`;
+            out += `👤 <b>NOMBRE:</b> <code>${cacheCed.nombre_completo || 'N/A'}</code>\n`;
+            out += `🆔 <b>DOC:</b> <code>${cacheCed.documento || 'N/A'}</code>\n`;
+            out += `📞 <b>TEL:</b> <code>${cacheCed.numero || 'N/A'}</code>\n`;
+            out += `📍 <b>DIR:</b> <code>${cacheCed.direccion || 'N/A'}</code>\n`;
+            out += `🏙️ <b>CIUDAD:</b> <code>${cacheCed.ciudad || 'N/A'}</code>\n`;
+            out += `🗺️ <b>DPTO:</b> <code>${cacheCed.departamento || 'N/A'}</code>\n`;
+            out += `📧 <b>EMAIL:</b> <code>${cacheCed.email || 'N/A'}</code>\n`;
+            out += `🎂 <b>NAC:</b> <code>${cacheCed.fecha_nacimiento || 'N/A'}</code>\n`;
+            out += `💼 <b>OCUP:</b> <code>${cacheCed.ocupacion || 'N/A'}</code>\n`;
+            out += `🏦 <b>BANCO:</b> <code>${cacheCed.banco || 'N/A'}</code>\n`;
+            out += `└──────────────────────────┘\n`;
+            out += `─────────────────────────\n✨ <b>by @DarkNull1 | @El_CuervoX</i>`;
+            return ctx.reply(out, { parse_mode: 'HTML' });
+        }
+
         const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
 
         let completed = false;
@@ -1715,6 +1737,9 @@ bot.on('text', async (ctx) => {
         ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
         setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
         ctx.reply(out, { parse_mode: 'HTML' });
+        if (resultados.rowCount > 0) {
+            guardarCache('cedula_co', cedula, resultados.rows[0]);
+        }
         return;
     }
 
