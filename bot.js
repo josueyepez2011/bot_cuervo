@@ -41,6 +41,7 @@ const esperandoDelateKey = {};
 const keyActiva = {};
 const esperandoPaisKey = {};
 const esperandoCedulaMexico = {};
+const esperandoCurpMexico = {};
 
 function generarKey(tipo) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -364,8 +365,13 @@ bot.command('cedula', async (ctx) => {
         const userKeyData = await pool.query('SELECT pais FROM user_keys WHERE user_id = $1', [userId]);
         const pais = userKeyData.rows[0]?.pais || 'colombia';
         if (pais === 'mexico') {
-            esperandoCedulaMexico[userId] = true;
-            return ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+            return ctx.reply("🇲🇽 Selecciona el tipo de búsqueda:", {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('🆔 Buscar por CVE', 'cedula_mx_cve')],
+                    [Markup.button.callback('🪪 Buscar por CURP', 'cedula_mx_curp')]
+                ])
+            });
         }
     }
     ctx.reply("🆔 Selecciona el tipo de cédula:", {
@@ -391,6 +397,22 @@ bot.action('cedula_colombiana', async (ctx) => {
     if (!acceso) return;
     esperandoCedula[ctx.from.id] = true;
     await ctx.editMessageText("🇨🇴 Envía el número de cédula a consultar:");
+});
+
+bot.action('cedula_mx_cve', async (ctx) => {
+    await ctx.answerCbQuery();
+    const acceso = await verificarAcceso(ctx);
+    if (!acceso) return;
+    esperandoCedulaMexico[ctx.from.id] = true;
+    await ctx.editMessageText("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+});
+
+bot.action('cedula_mx_curp', async (ctx) => {
+    await ctx.answerCbQuery();
+    const acceso = await verificarAcceso(ctx);
+    if (!acceso) return;
+    esperandoCurpMexico[ctx.from.id] = true;
+    await ctx.editMessageText("🇲🇽 Envía la CURP (Clave Única de Registro de Población):");
 });
 
 bot.command('panel', async (ctx) => {
@@ -592,8 +614,13 @@ bot.action(/^panel_(.+)$/, async (ctx) => {
             {
                 const accesoCed = await verificarAcceso(ctx);
                 if (!accesoCed) return;
-                esperandoCedulaMexico[userId] = true;
-                ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+                ctx.reply("🇲🇽 Selecciona el tipo de búsqueda:", {
+                    parse_mode: 'HTML',
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.callback('🆔 Buscar por CVE', 'cedula_mx_cve')],
+                        [Markup.button.callback('🪪 Buscar por CURP', 'cedula_mx_curp')]
+                    ])
+                });
             }
             break;
     }
@@ -925,8 +952,13 @@ bot.action(/^menu_(.+)$/, async (ctx) => {
             {
                 const accesoCedMx = await verificarAcceso(ctx);
                 if (!accesoCedMx) return;
-                esperandoCedulaMexico[userId] = true;
-                ctx.reply("🇲🇽 Envía la CVE (Clave de Votante Elector):");
+                ctx.reply("🇲🇽 Selecciona el tipo de búsqueda:", {
+                    parse_mode: 'HTML',
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.callback('🆔 Buscar por CVE', 'cedula_mx_cve')],
+                        [Markup.button.callback('🪪 Buscar por CURP', 'cedula_mx_curp')]
+                    ])
+                });
             }
             break;
         case 'cedula':
@@ -1641,6 +1673,119 @@ bot.on('text', async (ctx) => {
             setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
             ctx.reply(out, { parse_mode: 'HTML' });
             guardarCache('ccmx', cve, d);
+
+        } catch (e) {
+            completed = true;
+            clearInterval(progressInterval);
+            const detalle = e.code === 'ECONNABORTED' ? '⏱️ Tiempo de espera agotado' :
+                            e.code === 'ENOTFOUND' ? '🌐 API de México no disponible' :
+                            e.response?.data?.error?.detalle || e.message;
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ Error: ${detalle}`, { parse_mode: 'HTML' }).catch(()=>{});
+        }
+        return;
+    }
+
+    // Estado: esperando CURP para consulta México
+    if (esperandoCurpMexico[userId]) {
+        delete esperandoCurpMexico[userId];
+        const curp = ctx.message.text.trim().toUpperCase();
+        if (curp.length < 10 || curp.length > 20) return ctx.reply("❌ CURP inválida. Debe tener entre 10 y 20 caracteres.");
+
+        // Verificar caché primero
+        const cacheCurp = await obtenerCache('curp_mx', curp);
+        if (cacheCurp) {
+            let out = `╔════════════════════════╗\n🇲🇽 <b>CÉDULA MEXICANA (CURP)</b>\n╚════════════════════════╝\n\n`;
+            out += `👤 <b>NOMBRE:</b> <code>${cacheCurp.nombre_completo || 'N/A'}</code>\n`;
+            out += `🪪 <b>CURP:</b> <code>${cacheCurp.curp || 'N/A'}</code>\n`;
+            out += `🆔 <b>CVE:</b> <code>${cacheCurp.cve || 'N/A'}</code>\n`;
+            out += `📅 <b>NACIMIENTO:</b> <code>${cacheCurp.fecnac || 'N/A'}</code>\n`;
+            out += `⚧ <b>SEXO:</b> <code>${cacheCurp.sexo === 'H' ? 'HOMBRE' : cacheCurp.sexo === 'M' ? 'MUJER' : cacheCurp.sexo || 'N/A'}</code>\n\n`;
+            out += `📍 <b>DOMICILIO:</b>\n`;
+            out += `├ 🏠 <b>Calle:</b> <code>${cacheCurp.calle || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Interior:</b> <code>${cacheCurp.int || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Exterior:</b> <code>${cacheCurp.ext || 'N/A'}</code>\n`;
+            out += `├ 🏘️ <b>Colonia:</b> <code>${cacheCurp.colonia || 'N/A'}</code>\n`;
+            out += `└ 📮 <b>CP:</b> <code>${cacheCurp.cp || 'N/A'}</code>\n\n`;
+            out += `🗺️ <b>UBICACIÓN:</b>\n`;
+            out += `├ Entidad: <code>${cacheCurp.entidad || 'N/A'}</code>\n`;
+            out += `├ Delegación: <code>${cacheCurp.delegacion || 'N/A'}</code>\n`;
+            out += `├ Municipio: <code>${cacheCurp.municipio || 'N/A'}</code>\n`;
+            out += `├ Sección: <code>${cacheCurp.seccion || 'N/A'}</code>\n`;
+            out += `├ Localidad: <code>${cacheCurp.localidad || 'N/A'}</code>\n`;
+            out += `└ Manzana: <code>${cacheCurp.manzana || 'N/A'}</code>\n\n`;
+            out += `🪪 <b>IDENTIFICACIÓN:</b>\n`;
+            out += `├ Consecutivo: <code>${cacheCurp.consecutivo || 'N/A'}</code>\n`;
+            out += `├ Credencial: <code>${cacheCurp.credencial || 'N/A'}</code>\n`;
+            out += `├ Folio: <code>${cacheCurp.folio || 'N/A'}</code>\n`;
+            out += `└ Nacionalidad: <code>${cacheCurp.nac || 'N/A'}</code>\n`;
+            out += `─────────────────────────\n`;
+            out += `⏱️ <code>0.0s (caché)</code>\n`;
+            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+            return ctx.reply(out, { parse_mode: 'HTML' });
+        }
+
+        const msg = await ctx.reply("⏳ [░░░░░░░░░░] 0%", { parse_mode: 'HTML' });
+
+        let completed = false;
+        let progressPct = 20;
+        const progressInterval = setInterval(() => {
+            if (completed) { clearInterval(progressInterval); return; }
+            const fill = progressPct / 10;
+            const bar = "█".repeat(fill) + "░".repeat(10 - fill);
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `🇲🇽 [${bar}] ${progressPct}%`, { parse_mode: 'HTML' }).catch(()=>{});
+            progressPct = Math.min(progressPct + 20, 90);
+        }, 500);
+
+        try {
+            const axios = require('axios');
+            const res = await axios.post(`${CCMX_API_URL}/api/v1/consulta/ccmx`, {
+                key: CCMX_API_KEY,
+                firma: CCMX_API_SECRET,
+                curp: curp
+            }, { timeout: 15000 });
+
+            completed = true;
+            clearInterval(progressInterval);
+
+            const data = res.data;
+            if (data.error) {
+                ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "❌ Sin resultados").catch(()=>{});
+                return ctx.reply(`❌ ${data.error.mensaje}: ${data.error.detalle}`);
+            }
+
+            const d = data.datos;
+            let out = `╔════════════════════════╗\n🇲🇽 <b>CÉDULA MEXICANA (CURP)</b>\n╚════════════════════════╝\n\n`;
+            out += `👤 <b>NOMBRE:</b> <code>${d.nombre_completo || 'N/A'}</code>\n`;
+            out += `🪪 <b>CURP:</b> <code>${d.curp || 'N/A'}</code>\n`;
+            out += `🆔 <b>CVE:</b> <code>${d.cve || 'N/A'}</code>\n`;
+            out += `📅 <b>NACIMIENTO:</b> <code>${d.fecnac || 'N/A'}</code>\n`;
+            out += `⚧ <b>SEXO:</b> <code>${d.sexo === 'H' ? 'HOMBRE' : d.sexo === 'M' ? 'MUJER' : d.sexo || 'N/A'}</code>\n\n`;
+            out += `📍 <b>DOMICILIO:</b>\n`;
+            out += `├ 🏠 <b>Calle:</b> <code>${d.calle || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Interior:</b> <code>${d.int || 'N/A'}</code>\n`;
+            out += `├ #️⃣ <b>Exterior:</b> <code>${d.ext || 'N/A'}</code>\n`;
+            out += `├ 🏘️ <b>Colonia:</b> <code>${d.colonia || 'N/A'}</code>\n`;
+            out += `└ 📮 <b>CP:</b> <code>${d.cp || 'N/A'}</code>\n\n`;
+            out += `🗺️ <b>UBICACIÓN:</b>\n`;
+            out += `├ Entidad: <code>${d.entidad || 'N/A'}</code>\n`;
+            out += `├ Delegación: <code>${d.delegacion || 'N/A'}</code>\n`;
+            out += `├ Municipio: <code>${d.municipio || 'N/A'}</code>\n`;
+            out += `├ Sección: <code>${d.seccion || 'N/A'}</code>\n`;
+            out += `├ Localidad: <code>${d.localidad || 'N/A'}</code>\n`;
+            out += `└ Manzana: <code>${d.manzana || 'N/A'}</code>\n\n`;
+            out += `🪪 <b>IDENTIFICACIÓN:</b>\n`;
+            out += `├ Consecutivo: <code>${d.consecutivo || 'N/A'}</code>\n`;
+            out += `├ Credencial: <code>${d.credencial || 'N/A'}</code>\n`;
+            out += `├ Folio: <code>${d.folio || 'N/A'}</code>\n`;
+            out += `└ Nacionalidad: <code>${d.nac || 'N/A'}</code>\n`;
+            out += `─────────────────────────\n`;
+            out += `⏱️ <b>${data.tiempo_respuesta}</b>\n`;
+            out += `✨ <i>by @DarkNull1 | @El_CuervoX</i>`;
+
+            ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "✅ [██████████] 100%", { parse_mode: 'HTML' }).catch(()=>{});
+            setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{}), 200);
+            ctx.reply(out, { parse_mode: 'HTML' });
+            guardarCache('curp_mx', curp, d);
 
         } catch (e) {
             completed = true;
